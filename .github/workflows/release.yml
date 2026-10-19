@@ -1,0 +1,57 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  # Technitium version the app is compiled and tested against.
+  TECHNITIUM_IMAGE: technitium/dns-server:13.6.0
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Fetch Technitium assemblies
+        run: |
+          mkdir -p lib
+          docker pull "$TECHNITIUM_IMAGE"
+          cid=$(docker create "$TECHNITIUM_IMAGE")
+          for f in DnsServerCore.ApplicationCommon TechnitiumLibrary TechnitiumLibrary.Net TechnitiumLibrary.IO; do
+            docker cp "$cid:/opt/technitium/dns/$f.dll" "lib/$f.dll"
+          done
+          docker rm "$cid"
+
+      - name: Test
+        run: dotnet test -c Release
+
+      - name: Publish
+        run: dotnet publish src/LanCacheRouter -c Release -o out -p:Version=${GITHUB_REF_NAME#v}
+
+      - name: Create install zip
+        run: |
+          cd out
+          zip -j ../LanCacheRouter.zip LanCacheRouter.dll LanCacheRouter.deps.json Cronos.dll dnsApp.config
+          cd ..
+          unzip -l LanCacheRouter.zip
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LanCacheRouter.zip
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            Install: Technitium DNS Server → Apps → Install → select `LanCacheRouter.zip`.
+
+            Built against `${{ env.TECHNITIUM_IMAGE }}`.
