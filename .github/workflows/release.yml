@@ -10,7 +10,7 @@ permissions:
 
 env:
   # Technitium version the app is compiled and tested against.
-  TECHNITIUM_IMAGE: technitium/dns-server:13.6.0
+  TECHNITIUM_IMAGE: technitium/dns-server:15.6.2
 
 jobs:
   release:
