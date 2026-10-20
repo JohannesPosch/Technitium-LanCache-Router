@@ -40,6 +40,21 @@ The zip must be **flat** (all files at the top level, no folder inside). It cont
 | `Cronos.dll` | cron expression library |
 | `dnsApp.config` | the initial configuration – **inactive** until you edit it |
 
+## Or use a release
+
+Tagged versions (`vX.Y.Z`) are built by the [release workflow](../../.github/workflows/release.yml) and published as
+`LanCacheRouter.zip` on the repository's releases page, built and tested against the Technitium version named in the
+release notes. Each release also carries `LanCacheRouter.zip.sha256` and a signed build-provenance attestation. Check the
+download before you install it:
+
+```bash
+sha256sum -c LanCacheRouter.zip.sha256
+gh attestation verify LanCacheRouter.zip --repo JohannesPosch/Technitium-LanCache-Router
+```
+
+The checksum detects a damaged download; the attestation proves that the file was built by that workflow from a tagged
+commit of the repository.
+
 ## Install in Technitium
 
 1. Web UI → **Apps** → **Install** (or *Install App from file*) → choose `LanCacheRouter.zip`.

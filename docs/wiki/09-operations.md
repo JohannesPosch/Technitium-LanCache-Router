@@ -97,3 +97,7 @@ If a resolver caches answers, wait for the TTL (60 s) or use `dig` directly agai
   with control characters written as `\xNN`, so it cannot forge log lines, and cut at a safe length.
 - HTTPS health checks skip certificate validation by design (the target is an IP address and only liveness is tested).
 - There are no secrets in the configuration, and `baseUrl` may not contain credentials.
+- Releases are built by a workflow with no permissions beyond reading the repository while it restores packages and runs the
+  tests; only a separate job that handles the finished zip may write. The Technitium image it compiles against is pinned by
+  digest and the actions by exact version. Every release has a SHA-256 file and a build-provenance attestation
+  ([Installation → Or use a release](03-installation.md#or-use-a-release)).

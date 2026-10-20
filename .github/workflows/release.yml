@@ -5,28 +5,53 @@ on:
     tags:
       - "v*.*.*"
 
-permissions:
-  contents: write
+# No permissions unless a job asks for them. The build job, which restores NuGet packages and runs the tests, only reads;
+# the release job, which only handles the finished zip and never checks out or builds anything, is the one that can write.
+permissions: {}
 
 env:
-  # Technitium version the app is compiled and tested against.
-  TECHNITIUM_IMAGE: technitium/dns-server:15.6.1
+  # Technitium version the app is compiled and tested against, and the digest of that image. The digest is what is pulled
+  # (a tag can be moved, a digest cannot); the version is for humans. To update both, look up the digest of the new tag:
+  #   TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:technitium/dns-server:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+  #   curl -sI -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.oci.image.index.v1+json" \
+  #     https://registry-1.docker.io/v2/technitium/dns-server/manifests/<version> | grep -i docker-content-digest
+  TECHNITIUM_VERSION: 15.6.1
+  TECHNITIUM_DIGEST: sha256:e5474007d142d509c7de0d855132e3f0469bd6d5d77abf23dff5dad4e2975d09
 
+# Actions are pinned to an exact release (vX.Y.Z), not to a floating major tag such as v4. Move the pins forward on purpose,
+# after reading the release notes.
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4.3.1
         with:
           dotnet-version: 10.0.x
 
+      # The tag pattern above is a loose glob; only a real semantic version may reach the build.
+      - name: Check the version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not a version tag like v1.2.3 or v1.2.3-rc.1"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - name: Fetch Technitium assemblies
         run: |
+          image="technitium/dns-server@${TECHNITIUM_DIGEST}"
           mkdir -p lib
-          docker pull "$TECHNITIUM_IMAGE"
-          cid=$(docker create "$TECHNITIUM_IMAGE")
+          docker pull "$image"
+          cid=$(docker create "$image")
           for f in DnsServerCore.ApplicationCommon TechnitiumLibrary TechnitiumLibrary.Net TechnitiumLibrary.IO; do
             docker cp "$cid:/opt/technitium/dns/$f.dll" "lib/$f.dll"
           done
@@ -36,7 +61,9 @@ jobs:
         run: dotnet test -c Release
 
       - name: Publish
-        run: dotnet publish src/LanCacheRouter -c Release -o out -p:Version=${GITHUB_REF_NAME#v}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet publish src/LanCacheRouter -c Release -o out "-p:Version=${VERSION}"
 
       - name: Create install zip
         run: |
@@ -44,14 +71,46 @@ jobs:
           zip -j ../LanCacheRouter.zip LanCacheRouter.dll LanCacheRouter.deps.json Cronos.dll dnsApp.config
           cd ..
           unzip -l LanCacheRouter.zip
+          sha256sum LanCacheRouter.zip | tee LanCacheRouter.zip.sha256
+
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: release-files
+          path: |
+            LanCacheRouter.zip
+            LanCacheRouter.zip.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the provenance attestation
+      attestations: write # store the provenance attestation
+    steps:
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: release-files
+
+      # Ties LanCacheRouter.zip to this repository, workflow run and commit; check it with
+      # `gh attestation verify LanCacheRouter.zip --repo <owner>/<repository>`.
+      - uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-path: LanCacheRouter.zip
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.6.2
         with:
-          files: LanCacheRouter.zip
+          files: |
+            LanCacheRouter.zip
+            LanCacheRouter.zip.sha256
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             Install: Technitium DNS Server → Apps → Install → select `LanCacheRouter.zip`.
 
-            Built against `${{ env.TECHNITIUM_IMAGE }}`.
+            Built against Technitium `${{ env.TECHNITIUM_VERSION }}` (image digest `${{ env.TECHNITIUM_DIGEST }}`).
+
+            Verify the download with `sha256sum -c LanCacheRouter.zip.sha256`, or with
+            `gh attestation verify LanCacheRouter.zip --repo ${{ github.repository }}`.
