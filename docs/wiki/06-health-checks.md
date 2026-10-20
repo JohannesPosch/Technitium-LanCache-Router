@@ -1,116 +1,92 @@
-# 6. Health checks
+# Health checks
 
-Every **enabled** cache server is probed in the background. The result decides whether the server's address may appear in
-DNS answers.
+[Documentation](README.md) / Health checks
 
-## States
+Health checks decide whether a cache can appear in new DNS answers. Each enabled server is checked independently, from each Technitium node. A route uses only servers in the Healthy state.
 
-| State | Meaning | Handed out in DNS? |
-|---|---|---|
-| **Unknown** | Starting up, or waiting for the first conclusive probe results. | **No** |
-| **Healthy** | Passed `successThreshold` consecutive probes. | **Yes** |
-| **Unhealthy** | Failed `failThreshold` consecutive probes. | **No** |
-| **Disabled** | `enabled: false` on the server. Not probed. | **No** |
+## Start with the heartbeat check
 
-```mermaid
-stateDiagram-v2
-    [*] --> Unknown: app start, config change, server enabled
-    Unknown --> Healthy: successThreshold successes in a row
-    Unknown --> Unhealthy: failThreshold failures in a row
-    Healthy --> Unhealthy: failThreshold failures in a row
-    Unhealthy --> Healthy: successThreshold successes in a row
-    Unknown --> [*]: server disabled / removed
-    Healthy --> [*]: server disabled / removed
-    Unhealthy --> [*]: server disabled / removed
+The built-in defaults request `http://<cache-address>:80/lancache-heartbeat` and accept HTTP `200` or `204`. No health-check section is needed if this endpoint works on your cache.
+
+To use TCP checks for all caches, add:
+
+```jsonc
+"healthCheckDefaults": {
+  "type": "tcp",
+  "port": 80
+}
 ```
 
-Important properties:
+A server's own `healthCheck` overrides individual values in `healthCheckDefaults`, which in turn override the built-in values. Unspecified settings retain their defaults.
 
-- **Hysteresis.** One failed probe does not take a Healthy server out of service, and one successful probe does not bring
-  an Unhealthy server back. With the defaults it takes 2 failures (≈ 20 s) to go out and 3 successes (≈ 30 s) to come back.
-- A success in between failures **resets the failure count** (and the other way around): the counts are *consecutive*.
-- **Nothing is remembered across restarts.** After a restart every server is Unknown until proven healthy again.
-- **Unknown is never served.** There is no optimistic mode.
-- **Disabled** is not a probe result but an administrative decision. A disabled server has no probe loop at all.
+| Type | Successful result | What it tells you |
+| :--- | :--- | :--- |
+| `http` | GET returns a status in `expectedStatus`. | The configured HTTP endpoint responds. This is the default. |
+| `tcp` | Connection opens to the configured port. | The port accepts connections; no application request is sent. |
+| `https` | Same request as HTTP, over TLS. | The HTTPS endpoint responds. Certificate validation is skipped. |
+| `none` | No probe runs; immediately Healthy. | A fixed assumption of availability, useful for controlled tests. |
 
-## Probe types
+HTTP checks do not follow redirects. A `301` therefore fails unless explicitly accepted in `expectedStatus`. They send `User-Agent: LanCacheRouter-HealthCheck`. Errors and timeouts count as failures.
 
-| `type` | What is checked | Typical use |
-|---|---|---|
-| `tcp` | A TCP connection to `address:port` can be opened. Nothing is sent. | Cheapest; proves the port is open. |
-| `http` | `GET http://address:port/path` returns one of `expectedStatus`. | Proves nginx answers. Default path `/lancache-heartbeat` returns `204` on the monolithic container. |
-| `https` | The same over TLS. **Certificates are not validated** (the server is addressed by IP; only liveness is checked). | Caches behind TLS. |
-| `none` | Nothing is sent. The server is **Healthy from the moment it is configured** (it skips *Unknown*) and stays so. | Testing, or targets you cannot probe. |
+## Understanding server states
 
-Probe details:
+| State | Meaning | Eligible for answers? |
+| :--- | :--- | :--- |
+| Unknown | Waiting for enough initial results. | No |
+| Healthy | Has reached the consecutive success threshold. | Yes |
+| Unhealthy | Has reached the consecutive failure threshold. | No |
+| Disabled | Administratively disabled; no checks run. | No |
 
-- A probe that takes longer than `timeoutSeconds` counts as a **failure**; so does any error (refused, unreachable,
-  reset, TLS failure, unexpected exception).
-- HTTP probes send `User-Agent: LanCacheRouter-HealthCheck` and **do not follow redirects**.
-- The probe uses the **same address** that is returned to clients. It tests reachability from the DNS server, which is
-  not necessarily the clients' point of view – if clients sit behind a firewall that the DNS server does not, the probe
-  cannot see that.
+The default thresholds are two failures to become Unhealthy and three successes to become Healthy. A success resets the failure counter; a failure resets the success counter. A single failed check therefore leaves a Healthy cache in service.
 
-## Timing
+Health checks test the endpoint from the DNS server's position. They cannot detect a firewall rule affecting only clients, prove that downloads complete, or measure storage performance.
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `intervalSeconds` | 10 | pause between two probes of a server |
-| `timeoutSeconds` | 2 | max duration of one probe; must not exceed the interval |
-| `failThreshold` | 2 | failures in a row → Unhealthy |
-| `successThreshold` | 3 | successes in a row → Healthy |
+## Timing and DNS caching
 
-Time to react ≈ `failThreshold × intervalSeconds` (plus up to one interval for the next probe to run) to *stop* using a
-failing cache, and `successThreshold × intervalSeconds` to *resume* using a recovered one. Add the DNS `ttl` (default
-60 s): clients may keep the old answer that long. To react faster, lower `intervalSeconds` and `dns.ttl` together.
+| Setting | Default | Purpose |
+| :--- | :--- | :--- |
+| `intervalSeconds` | `10` | Delay after a completed probe before the next probe. |
+| `timeoutSeconds` | `2` | Maximum time allowed for a probe. |
+| `failThreshold` | `2` | Consecutive failures needed to stop selecting a cache. |
+| `successThreshold` | `3` | Consecutive successes needed to select it again. |
+| `dns.ttl` | `60` | How long clients may retain a synthesized DNS answer. |
+
+Detection time depends on when the failure happens and how long each probe takes. With quick failures, two failed checks at the default interval take roughly 10–20 seconds to detect a new outage. Timeouts add their own duration. Recovery from Unhealthy requires three successful normal-interval checks, roughly 20–30 seconds with quick responses.
+
+After detection, new lookups select a standby or pass through. Clients holding an earlier answer can continue using it until its TTL expires, and open connections are not redirected. Reducing the probe interval and TTL can shorten reaction time, at the cost of more checks and DNS lookups.
 
 ### Startup behavior
 
-When the app starts (or a server is added or changed), with `startupProbe.enabled` (default):
+Newly started, changed, or re-enabled servers begin Unknown. By default, the first probe runs immediately and subsequent probes run one second after the previous probe completes until the state becomes Healthy or Unhealthy.
 
-1. the server is probed **immediately**;
-2. while the server is still **Unknown**, probing continues every `fastIntervalSeconds` (default 1 s);
-3. once the server is Healthy or Unhealthy it switches to the normal interval.
+With quick successful responses, the default three successes finish in about two seconds plus probe time. A slow or unreachable endpoint takes longer. Once the state settles, the normal ten-second interval applies, including during later recovery from Unhealthy.
 
-So with the defaults a healthy cache is in service ≈ **3 seconds** after start instead of 30. A dead cache is declared
-Unhealthy after ≈ 2 seconds. Set `startupProbe.enabled: false` to disable this; the first probe is then delayed by a
-random fraction of the interval so many servers do not probe in lockstep.
+Set `startupProbe.enabled` to `false` to use the normal interval from the beginning. The initial delay is then randomized within that interval. `type: none` always starts Healthy without checks.
 
-## What a configuration change does to health state
+## Configuration changes and maintenance
 
-| Change | Effect on that server |
-|---|---|
-| nothing relevant (other servers, routes, DNS settings changed) | state and probing continue untouched |
-| `address` changed | restarts as Unknown |
-| any effective health-check value changed (including a change in `healthCheckDefaults` that affects it, and a server's own `verbose`) | restarts as Unknown |
-| `enabled` set to `false` | becomes Disabled, probing stops |
-| `enabled` set back to `true` | restarts as Unknown |
-| server removed | disappears; routes that refer to it are rejected at validation time |
+| Change | Result |
+| :--- | :--- |
+| Change routes, DNS settings, or unrelated servers | Unchanged servers keep their state and checks. |
+| Change a server's address or any effective health-check value | That server's tracking restarts. |
+| Set a cache server's `enabled` to `false` | It becomes Disabled and stops being checked. |
+| Re-enable a cache or restart the app | Probed servers start Unknown again. |
+| Set the app's `enabled` to `false` | All probing stops; all queries pass through. |
 
-## Logging
+For maintenance, disable the **cache server entry** and allow time for old DNS answers and connections to finish before stopping the cache. Routes can then use their standbys or normal DNS.
 
-State changes are always logged:
+## Read the results
 
-```
-LanCache Router: Cache server 'monolith-1' (192.168.17.44): initial state Unknown
-LanCache Router: Cache server 'monolith-1' (192.168.17.44): Unknown -> Healthy
-LanCache Router: Cache server 'monolith-1' (192.168.17.44): Healthy -> Unhealthy
+State changes are always written to Technitium's log:
+
+```text
+LanCache Router: Cache server 'cache-1' (192.168.17.44): initial state Unknown
+LanCache Router: Cache server 'cache-1' (192.168.17.44): Unknown -> Healthy
+LanCache Router: Cache server 'cache-1' (192.168.17.44): Healthy -> Unhealthy
 ```
 
-With `verbose: true` every probe is logged, which is how you find out *why* a server flaps:
+Temporarily set `logging.verbose` to `true` for individual probe results and query decisions. A server's own `healthCheck.verbose` also logs probes, but changing that setting restarts its tracking because it is part of the effective health check. Global verbose logging avoids that reset.
 
-```
-LanCache Router: Health probe monolith-1/192.168.17.44: OK (connected)
-LanCache Router: Health probe monolith-1/192.168.17.44: FAILED (ConnectionRefused)
-LanCache Router: Health probe monolith-1/192.168.17.44: FAILED (HTTP 502)
-LanCache Router: Health probe monolith-1/192.168.17.44: FAILED (timeout after 2s)
-```
+---
 
-## Choosing settings
-
-- **Start with `tcp` on port 80.** It is the simplest option and has no moving parts.
-- Use **`http`** if the box can be up with nginx down (container crashed, port still open through a proxy).
-- Keep **`successThreshold` > `failThreshold`**: recover cautiously, fail quickly.
-- A flapping server (Healthy ⇄ Unhealthy) means the thresholds are too tight for its behavior or the path is unreliable.
-  Turn on `verbose` and look at the detail text. Prefer the global `logging.verbose` for this: switching a server's own
-  `healthCheck.verbose` on counts as a health-check change and restarts that server as *Unknown* (a few seconds of passthrough).
+**Related:** [Standby routing](05-routing.md#add-a-standby) · [All health-check settings](04-configuration-reference.md#health-check-settings) · [Operations](09-operations.md)

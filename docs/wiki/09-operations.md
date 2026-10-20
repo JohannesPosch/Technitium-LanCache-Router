@@ -1,103 +1,115 @@
-# 9. Operations and troubleshooting
+# Operations and troubleshooting
 
-## Where to look
+[Documentation](README.md) / Operations and troubleshooting
 
-Everything the app logs goes to Technitium's log (web UI → **Logs**, or the log files) and starts with
-`LanCache Router:`.
+Start with a direct A lookup from an affected client, then read the app's decision in Technitium's logs. Most unexpected results come from a different client address, an earlier DNS rule, an unavailable cache, or a domain absent from the active list.
 
-| Message | Meaning |
-|---|---|
-| `enabled with N cache server(s) and M route(s)` | A configuration was applied. |
-| `disabled, all queries are passed through` | `enabled` is `false` (or no config). |
-| `warning: routes[priority=20] (…) is never used: shadowed by priority 10 (…)` | The configuration is accepted but has a likely mistake. |
-| `configuration rejected, keeping the previous one: …` | A save failed validation; the list of problems follows. |
-| `Cache server 'x' (a.b.c.d): initial state Unknown` | First sighting of a server after start or change. |
-| `Cache server 'x' (a.b.c.d): Unknown -> Healthy` | The server is now being handed out. |
-| `Cache server 'x' (a.b.c.d): Healthy -> Unhealthy` | The server was taken out of DNS. |
-| `Health probe x/a.b.c.d: FAILED (ConnectionRefused)` | Only with `verbose: true`: one probe result and the reason. |
-| `Domain list: loaded persisted snapshot from 2026-10-19 04:00:12Z` | Start-up, before any download. |
-| `Domain list: refreshed, 128 patterns in 26 service(s)` | A download succeeded and was applied. |
-| `Domain list: 128 patterns active in 26 service(s)` | The matcher was (re)built, e.g. after a filter change. |
-| `Domain list: refresh failed, keeping the previous list (from …); retrying in 5 min or at the next scheduled time: …` | A download failed. DNS keeps using the old list. |
-| `Domain list: skipped N invalid line(s) in f.txt, first: '…'` | The upstream list has odd lines. Harmless. |
-| `Domain list: refreshCron has no upcoming occurrence, so the list is only refreshed when the source changes or the app is configured again` | The cron expression never fires (for example `0 0 31 2 *`). Fix the expression. |
-| `Domain list: unexpected error in the refresh loop, trying again in 5 min: …` | An internal error in the scheduler. The loop continues; please report it with the text. |
-| `Domain list: service 'x' in the service filter does not exist in the list` | Probably a typo in `include`/`exclude`. |
-| `Domain list: ignoring persisted snapshot from …` / `ignoring unreadable snapshot` | The snapshot belongs to another `baseUrl` or is damaged. |
-| `Answered 192.168.17.50 A cdn.steamcontent.com [steam] -> monolith-1 (192.168.17.44)` | Per-query line (`logging.queries: true`). `[1/2]` is the position of the answering server in the route's list; `(failover, preferred: … not Healthy)` and `(no data)` are appended when they apply. |
-| `Error handling query, passing it through: …` | An unexpected exception. The query was resolved normally. Please report it with the text. |
+## A quick check
 
-## Why is this name not answered with the cache?
-
-Work through the pipeline in order; the first "no" is the cause.
-
-1. **Is the app enabled and loaded?** Look for `LanCache Router: enabled with …` after the last save. If you see
-   `configuration rejected`, the old config is still running.
-2. **Does Technitium ask the app at all?** It does not if the name is served by a local zone, if another app answers
-   first, if *recursion desired* is not set, or if the client may not use recursion. Test with `dig` against the server
-   (below) and compare with another name.
-3. **Is it an A query?** AAAA/HTTPS/SVCB are intentionally answered empty; other types are never answered.
-4. **Does the client match a route?** Turn on `logging.queries`. If the query line never appears, the client either
-   matched no row (check priorities and the shadowed-warnings), matched a `passthrough` row, or Technitium saw a
-   different source address than you expect (Docker NAT, proxy).
-5. **Is the server Healthy?** Look at the last `Cache server '…'` line. Anything other than `-> Healthy` means it is
-   not handed out; with `verbose: true` the probe lines tell you why. Remember the startup delay.
-6. **Is the name in the list?** Compare with the domain file in the upstream repo. Wildcards do not cover the apex.
-   Check `services.include/exclude` and `excludeDomains`. A line `Domain list: N patterns active in M service(s)` with
-   a small N points at filters.
-7. **Is the list there at all?** If GitHub has never been reachable and there is no snapshot, nothing matches. Look
-   for `refresh failed`.
-
-### Useful commands
+Replace the DNS and cache addresses with yours. Run DNS lookups from the client network being tested:
 
 ```bash
-# What does the server answer? (run from a client in a routed network)
-dig @<dns> cdn1.steamcontent.com A +noall +answer +comments
-dig @<dns> cdn1.steamcontent.com AAAA +noall +comments +authority
+dig @192.168.17.53 lancache.steamcontent.com A +noall +answer +comments
+dig @192.168.17.53 lancache.steamcontent.com AAAA +noall +comments +authority
+```
 
-# From the DNS host itself (add a 127.0.0.1/32 route to test this way)
-dig @127.0.0.1 lancache.steamcontent.com
+Check the configured endpoint **from the DNS node's network**, for example inside its container when relevant:
 
-# Is the cache itself fine? The same check the app does:
-curl -i http://192.168.17.44/lancache-heartbeat       # expect 204
+```bash
+curl -i --max-time 2 http://192.168.17.44/lancache-heartbeat
 nc -zv 192.168.17.44 80
 ```
 
-If a resolver caches answers, wait for the TTL (60 s) or use `dig` directly against Technitium.
+The default HTTP check accepts `200` or `204`; the TCP check only needs a successful connection. A successful test from your workstation does not establish reachability from the DNS node.
+
+On Windows, use `Resolve-DnsName lancache.steamcontent.com -Type A -Server 192.168.17.53` for the DNS test. A test from the DNS host needs a matching route for that host's source address.
+
+## Logging
+
+App messages appear in Technitium's logs with the prefix `LanCache Router:`. Routine state changes, refresh results, warnings, and errors are always logged.
+
+To see cache answers, set `logging.queries` to `true`. To explain both answers and passthrough decisions, temporarily use:
+
+```jsonc
+"logging": {
+  "verbose": true
+}
+```
+
+Verbose mode includes query decisions, probes, effective configuration, and domain-refresh details. It can log every query reaching the enabled app; turn it off when finished. It cannot report queries Technitium never sends to the handler, and a disabled app does not log per-query decisions.
+
+An answered-query line looks like this:
+
+```text
+LanCache Router: Answered 192.168.17.50 A lancache.steamcontent.com [steam] -> cache-2 (192.168.18.44) [2/2] (failover, preferred: cache-1 not Healthy)
+```
+
+`[2/2]` identifies the second server in a two-server preference list. An empty AAAA, HTTPS, or SVCB answer adds `(no data)`.
+
+<details>
+<summary>Log message reference</summary>
+
+| Log text | Meaning and next step |
+| :--- | :--- |
+| `enabled with ... cache server(s) and ... route(s)` | A configuration was applied. The cache still needs to become Healthy and the domain list must be available. |
+| `configuration rejected, keeping the previous one` | Fix the reported values; the proposed settings are not running. |
+| `Unknown -> Healthy` | The cache can now be selected. |
+| `Healthy -> Unhealthy` | The route will select its next Healthy server or pass through. Read probe details in verbose mode. |
+| `Domain list: loaded persisted snapshot` | A saved base list was loaded. |
+| `Domain list: refreshed` / `patterns active` | Download succeeded / the filtered matcher was built. Counts depend on your source and filters. |
+| `refresh failed, keeping the previous list` | An automatic retry is pending; existing list data stays active. |
+| `ignoring unreadable snapshot` / `ignoring persisted snapshot from` | The saved file is unreadable or belongs to a different source. |
+| `could not save snapshot` | The active list works in memory; check app-folder write access so it survives a restart. |
+| `service ... does not exist in the list` | Check service filter names against the index. |
+| `skipped ... invalid line(s)` | Those source entries were omitted; inspect the source if expected names are missing. |
+| `refreshCron has no upcoming occurrence` | A valid-looking cron expression never fires. Choose a usable schedule. |
+| `unexpected error in the refresh loop, trying again` | The loop will retry; retain the error text if reporting a recurring problem. |
+| `the refresh loop stopped unexpectedly` | Scheduled refreshes have stopped. Save the configuration again to restart the loop and retain the error for a report. |
+| `Error handling query, passing it through` | The app left the query to normal resolution after an unexpected error. Include the error in a report. |
+
+</details>
+
+## Why is this name not answered with the cache?
+
+1. **Confirm the running configuration.** Check that the app is enabled and the last save succeeded. A rejected save leaves the previous settings active.
+2. **Confirm the query reaches this server and handler.** Query Technitium directly from the affected client. Check local authoritative zones, recursion permissions, other apps, and Advanced Blocking allow or bypass rules. A client using another resolver will not use this app.
+3. **Test an A record.** The default response to eligible AAAA, HTTPS, and SVCB queries is deliberately empty. Other record types pass through.
+4. **Read the client address and route decision.** Use `logging.verbose`, since `logging.queries` omits passthrough queries. Check subnet, priority, enabled flags, and any passthrough exception. NAT or a forwarding resolver may hide the original address.
+5. **Check health on the responding DNS node.** The selected route needs a Healthy server. Read its latest state transition and probe results. Newly started or changed servers wait for startup checks.
+6. **Check the name against the active domain source.** Verify service filters, exact versus wildcard matching, and exclusions. A wildcard does not include its base name. Use `lancache.steamcontent.com` for a Steam test with the default list.
+7. **Confirm there is a base list.** Look for loaded-snapshot or refreshed-list messages. With no usable list, even configured extra domains wait for a successful base download. Resolve refresh failures from that node.
+
+Once a direct lookup behaves correctly, allow previous client or intermediate-resolver answers to expire. A direct query avoids those intermediate caches; it still allows Technitium's own cache to participate during passthrough.
 
 ## Common situations
 
-| Situation | What happens | What to do |
-|---|---|---|
-| **The cache server goes down** | After `failThreshold` failed probes (≈ 20 s) the server turns Unhealthy; routed clients get real addresses on their next lookup (≤ `ttl`). Connections already open to the failed cache are the client's business; new lookups no longer return it. | Nothing. Fix the cache; it returns after `successThreshold` successes. |
-| **The cache comes back** | Back in service after 3 good probes (≈ 30 s). | Nothing. |
-| **Technitium restarts** | Servers start Unknown, probed at once and every second until settled → in service within seconds. The domain list is read from the snapshot immediately. | Nothing. |
-| **GitHub is unreachable** | The last list stays active; refresh retried every 5 minutes. | Nothing, unless it lasts for weeks and the list grows stale. |
-| **You break the config** | The save is refused and the previous config keeps running. | Fix what the error message lists. |
-| **You want to take a cache out for maintenance** | Set its `enabled` to `false` (state Disabled). Routes switch to the next server in their list; routes without another Healthy server pass through. | Re-enable afterwards; it starts as Unknown. |
-| **Two Technitium nodes disagree** | Health is per node; a node that cannot reach the cache will pass through while the other still serves it. | Check network reachability from the failing node. |
-| **A new game is not cached** | Not in the upstream list yet. | Add its hosts under `extraDomains`, and send them upstream. |
+| Situation | Expected behavior | What to check |
+| :--- | :--- | :--- |
+| Cache stops responding | After the failure threshold, new answers use a Healthy standby or normal DNS. | Detection takes time; clients may retain earlier answers for the TTL. |
+| Cache returns | The preferred server is selected after its success threshold. | Recovery from Unhealthy uses the normal probe interval. |
+| Technitium restarts | Probed caches start Unknown; a usable saved list loads first. | Wait for successful startup probes and list availability. |
+| Domain source is unreachable | The previous list remains active; refresh retries. | On a first install without a snapshot, queries pass through. |
+| Nodes disagree | Each node uses its own health state and list. | Check cache and source reachability from each node. |
+| A new download service is absent | Its hosts may be missing from the source. | Add verified cacheable hosts with `extraDomains` or update your source. |
 
-## Planned maintenance of the app
+## Maintenance and updates
 
-- **Update:** install the new zip over the old app in the Apps page. The configuration is kept. The app is
-  initialized again, so servers start as Unknown and recover within seconds.
-- **Roll back:** install the previous zip the same way.
-- **Switch it off quickly:** set `"enabled": false`. Probing and downloads stop at once and every query is passed through.
-- **Uninstall:** removes the app and its snapshot. Queries return to normal DNS.
+For cache maintenance, set that server entry's `enabled` to `false`. Keep it reachable long enough for prior DNS answers and connections to finish, then take it offline. Re-enable it when ready; probed servers must pass startup checks again.
 
-## Security notes
+To stop cache routing entirely, set the app's `enabled` to `false`. Queries pass through and background work stops. Re-enabling follows the startup rules.
 
-- The app **sends** nothing to clients except DNS answers and **receives** nothing except what Technitium hands it.
-- Outbound connections: HTTP(S) to `baseUrl` (through Technitium's proxy if configured) and probes to the cache servers.
-- It never executes anything from the downloaded list, only parses text. Download size, time, number of files and
-  patterns, file locations and redirects are restricted ([Domain list → Safety limits](07-domain-list.md#safety-limits));
-  the redirect check can be switched off with [`security`](04-configuration-reference.md#security), which is warned about.
-- Text that comes from outside (queried names, lines and file names of the downloaded list, error messages) is logged
-  with control characters written as `\xNN`, so it cannot forge log lines, and cut at a safe length.
-- HTTPS health checks skip certificate validation by design (the target is an IP address and only liveness is tested).
-- There are no secrets in the configuration, and `baseUrl` may not contain credentials.
-- Releases are built by a workflow with no permissions beyond reading the repository while it restores packages and runs the
-  tests; only a separate job that handles the finished zip may write. The Technitium image it compiles against is pinned by
-  digest and the actions by exact version. Every release has a SHA-256 file and a build-provenance attestation
-  ([Installation → Or use a release](03-installation.md#or-use-a-release)).
+Before updating, save a copy of your configuration and note the compatible Technitium version. Install the new ZIP over the existing app. Technitium preserves `dnsApp.config`; health is rebuilt, and a domain snapshot may need to be downloaded again. To roll back, install the earlier compatible ZIP and restore a configuration it supports if needed.
+
+Uninstalling removes the app and its saved snapshot. Existing client answers can persist until they expire.
+
+## Network and security behavior
+
+Outbound traffic consists of domain-list HTTP(S) requests and cache health probes. Domain downloads use Technitium's proxy and IP-family preferences. HTTPS health probes skip certificate validation and test endpoint liveness only.
+
+The app parses domain data as text with [download limits](07-domain-list.md#safety-limits). Embedded credentials in `baseUrl` are rejected. External text in logs has control characters escaped and length bounded. See [release verification](03-installation.md#1-get-the-app) for checksum and build-provenance checks.
+
+When reporting a problem, include the app and Technitium versions, the affected client's source address as seen by the app, a configuration with private details removed, and relevant log lines. If it involves a cluster, identify which node answered.
+
+---
+
+**Related:** [Configuration reference](04-configuration-reference.md) · [How it works](02-how-it-works.md) · [DNS answers](08-dns-answers.md)

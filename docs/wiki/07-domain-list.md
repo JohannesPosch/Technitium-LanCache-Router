@@ -1,156 +1,124 @@
-# 7. Domain list
+# Domain list
 
-The app needs to know which hostnames are download CDNs of games and updates. It takes them from the community
-list [uklans/cache-domains](https://github.com/uklans/cache-domains) – the same list `lancache-dns` is built from –
-and keeps it current on a schedule you control.
+[Documentation](README.md) / Domain list
 
-## The source format
+The domain list tells the app which hostnames belong to cacheable downloads. By default, it downloads the community list from [uklans/cache-domains](https://github.com/uklans/cache-domains), refreshes it daily, and keeps a local copy for restarts.
 
-| File | Content |
-|---|---|
-| `cache_domains.json` | The index: `{ "cache_domains": [ { "name": "steam", "domain_files": ["steam.txt"], … }, … ] }` |
-| `steam.txt`, `epicgames.txt`, … | One entry per line. `#` starts a comment. Blank lines are ignored. |
+You can leave the defaults in place, select particular services, or add your own download domains. A domain match still needs a matching client route and a Healthy cache before the app answers.
 
-A line is either an exact name (`lancache.steamcontent.com`) or a wildcard (`*.cdn.blizzard.com`). The **service name**
-comes from the index, not the file name (the service `wsus` reads `windowsupdates.txt`).
+## Select services and domains
 
-Files are read as UTF-8; a leading byte order mark (as written by some Windows editors) is ignored, which matters if you
-host the files yourself.
+Add a `domainList` section to your configuration. This example selects Steam and Epic, adds a custom game's patch hosts, and exempts that game's login host:
 
-At the time of writing the list has 26 services and 128 entries, of which 16 are wildcards.
+```jsonc
+"domainList": {
+  "services": { "include": ["steam", "epicgames"] },
+  "extraDomains": [
+    { "domain": "*.patch.mygame.example", "service": "mygame" }
+  ],
+  "excludeDomains": ["login.patch.mygame.example"]
+}
+```
+
+An empty `include` uses all services. Use `services.exclude` to omit specific services instead; a service cannot appear in both filters. Names are case-insensitive and come from the source index. An unknown service name produces a log warning.
+
+Filters apply in this order:
+
+1. Select included services, then remove excluded services.
+2. Add `extraDomains`, regardless of service filters. The service label defaults to `custom`.
+3. Exclude any query name matching `excludeDomains`.
+
+The app needs a downloaded or saved base list before it builds the matcher, including manual additions. Extra domains alone do not bootstrap an installation whose first download has never succeeded.
 
 ## How names are matched
 
-| Entry | Matches | Does not match |
-|---|---|---|
-| `lancache.steamcontent.com` | exactly that name | `a.lancache.steamcontent.com`, `steamcontent.com` |
-| `*.cdn.blizzard.com` | `a.cdn.blizzard.com`, `x.y.cdn.blizzard.com` | **`cdn.blizzard.com`** (the apex) |
+| Pattern | Matches | Leaves out |
+| :--- | :--- | :--- |
+| `downloads.example.com` | Exactly that hostname. | `a.downloads.example.com` |
+| `*.downloads.example.com` | Subdomains at any depth, such as `a.downloads.example.com` or `a.b.downloads.example.com`. | `downloads.example.com` itself. |
 
-- A wildcard does **not** cover its own base name. The list therefore contains both `*.cdn.blizzard.com` and
-  `cdn.blizzard.com` where both are meant.
-- Matching ignores case and a trailing dot.
-- If several entries match the same name, **an exact entry beats a wildcard, and a deeper wildcard beats a shallower
-  one**. The matching entry decides which *service* the name is attributed to (visible in the per-query log).
-- If two services contain the same entry, the first one in the list keeps it.
-- `excludeDomains` is checked first and wins over everything.
+Matching ignores case and trailing dots. To include both a base name and its subdomains, add both forms. Exact entries take precedence over wildcards; a more specific wildcard takes precedence over a broader one. For identical patterns in multiple services, the first service keeps attribution. Exclusions take precedence over all included matches.
 
-> **Steam.** The list contains only `lancache.steamcontent.com` for Steam. That is correct: Steam clients look that
-> name up to discover a cache and then talk to the address they get. Names like `cache1-vie1.steamcontent.com` are
-> not (and need not be) cache domains.
+For a Steam verification lookup, use `lancache.steamcontent.com` with the default list. The app's tests and examples use this discovery name; another hostname under `steamcontent.com` is not automatically included just because it belongs to Steam. If you use a custom or pinned source, check its entries.
 
-## When the list is downloaded
+## Refresh schedule
 
-| Trigger | Download? |
-|---|---|
-| App starts for the first time and `refreshOnStartup` is `true` | yes |
-| App starts, there is **no** list at all (no snapshot yet), `refreshOnStartup` is `false` | yes |
-| The cron schedule fires (`refreshCron`, plus a random 0–2 min per node) | yes |
-| A failed refresh | retried after 5 minutes, or at the next scheduled time if that comes first |
-| `baseUrl` changed in the configuration | yes, immediately |
-| Any other configuration change (filters, routes, …) | **no** – the list in memory is re-filtered instantly. A download or a pending retry that is running at that moment is dropped; the next refresh is at the next scheduled time. |
-| The app is disabled | nothing runs; enabling it again counts as a start |
+The default is daily at 04:00 in the **Technitium process's time zone**. Five cron fields mean minute, hour, day of month, month, and day of week. Six fields add seconds at the beginning.
 
-Downloads are **all or nothing**: `cache_domains.json` and every file it references must arrive, or the whole refresh
-is discarded and the previous list stays active. A refresh that arrives complete is **always applied**; there is no
-"suspiciously small" check.
+| `refreshCron` | Schedule |
+| :--- | :--- |
+| `0 4 * * *` | Daily at 04:00. |
+| `30 3 * * 1` | Mondays at 03:30. |
+| `0 */6 * * *` | Every six hours, on the hour. |
+| `0 4 1 * *` | First day of each month at 04:00. |
+| `0 4 1 */3 *` | First day of January, April, July, and October at 04:00. |
+| `30 0 4 * * *` | Daily at 04:00:30. |
 
-Downloads go through Technitium's own HTTP client, so the **server's configured proxy** and its IPv4/IPv6 preference
-are used, exactly as for Technitium's block-list downloads.
+Each node adds a random delay of up to two minutes to scheduled refreshes. Set the host or container time zone to suit your schedule; there is no separate app time-zone setting.
 
-### Safety limits
+### When the list is downloaded
 
-- Each file is limited to **5 MB**.
-- One download is limited as a whole, so a hostile or broken source cannot use up the server's memory: by default at most
-  **500 domain files**, **20 million characters** of text in total (index included) and **100,000 patterns** in total
-  (counted per service, so a file that many services list counts for each of them). The limits can be changed in
-  [`security`](04-configuration-reference.md#security). The real list is a few kilobytes
-  with about 130 entries. Exceeding a limit fails the refresh like any other failed download: the previous list stays
-  active and the refresh is retried.
-- Each request has the `httpTimeoutSeconds` timeout.
-- Files must live on the **same host and below the base path** as the index; an index that points elsewhere
-  (another host, `..`, an absolute path) fails the refresh.
-- **Redirects** are followed by the HTTP client, so the above would not be enough on its own. With
-  [`security.restrictDownloadRedirects`](04-configuration-reference.md#security) (on by default) a response that a
-  redirect moved outside the `baseUrl` folder is rejected and fails the refresh. The check looks at the response, so the
-  request to the redirect target has already been sent; its content is discarded unread.
-- A plain `http://` `baseUrl` is allowed but logged as a warning, because the list can then be changed on its way. Use
-  `https://`, or pin the list to a tag or commit.
-- Lines that are not valid domain patterns are skipped and logged (`skipped 2 invalid line(s) in x.txt, first: '…'`);
-  they do not fail the refresh. `*`, single labels like `com` and `*.com` are rejected.
+| Event | Result |
+| :--- | :--- |
+| Startup with `refreshOnStartup: true` | Refresh immediately, using a usable snapshot while downloading. |
+| Startup without any usable list | Download even if `refreshOnStartup` is `false`. |
+| Scheduled refresh | Download after the node's added delay. |
+| Failed download | Retain the previous list; retry after five minutes or at the next scheduled time, whichever comes first. |
+| Change `baseUrl` | Start a download immediately. The existing in-memory list can remain active until the new source succeeds. |
+| Save other settings | Re-filter the current list and restart the schedule. Cancel an in-progress download or pending retry; download immediately only if no base list is available. |
+| Disable the app | Stop downloads. Re-enabling follows the startup rules. |
 
-## Persistence
+A refresh downloads the index and every referenced domain file, including services excluded by your filters. It replaces the list only after the whole refresh succeeds. Malformed domain lines are skipped and logged, while a missing file or invalid index fails the refresh. A successfully parsed list is applied even if its pattern count falls sharply; there is no minimum-size comparison with the previous list.
 
-After every successful refresh the **unfiltered** list is saved to
-`<app folder>/state/domains-snapshot.json` on that node. At start the snapshot is loaded first, so DNS works even
-if GitHub is unreachable after a reboot. A snapshot from a different `baseUrl` is ignored. A damaged snapshot is ignored
-(and logged); its patterns are re-validated on load.
+## Saved snapshots
 
-Because the snapshot is *unfiltered*, changing `services.include/exclude`, `extraDomains` or `excludeDomains` takes
-effect immediately without a download.
+Each successful download saves the **unfiltered** list to `state/domains-snapshot.json` inside the app folder on that node. At startup, a usable snapshot is loaded before a new download finishes. Changing filters can therefore take effect immediately without internet access.
 
-## Filtering
+Snapshots from a different source URL are ignored; unreadable snapshots are logged and ignored. A failed snapshot write leaves the in-memory list active but means the latest copy will not be available after a restart. App updates can replace files in the app folder, so snapshot persistence should not be relied on across package updates. Uninstalling removes the snapshot.
 
-Order of application:
+## Use a pinned source or mirror
 
-1. Services: if `services.include` is not empty, only those; then remove `services.exclude`.
-2. `extraDomains` are added (always, whatever the service filter says).
-3. `excludeDomains` block matching names.
-
-A service name in `include`/`exclude` that is not in the list is logged as a warning (usually a typo):
-
-```
-LanCache Router: Domain list: service 'stem' in the service filter does not exist in the list
-```
-
-### Examples
-
-Only Steam and Epic:
+`baseUrl` identifies the folder containing `cache_domains.json` and its domain files. The default follows the source's `master` branch. For controlled updates, replace the branch with a chosen tag or commit:
 
 ```jsonc
-"services": { "include": ["steam", "epicgames"] }
+"domainList": {
+  "baseUrl": "https://raw.githubusercontent.com/uklans/cache-domains/<tag-or-commit>/"
+}
 ```
 
-Everything except lancache's own test names (`canary`, `litmus`, `trigger` under `lancache.net` and `uklans.net`):
+Replace the placeholder before saving. You can also point at an HTTP(S) mirror that serves the same format. Downloads use Technitium's HTTP stack, including its configured proxy and IPv4/IPv6 preference.
 
-```jsonc
-"services": { "exclude": ["test"] }
+<details>
+<summary>Source format for mirror maintainers</summary>
+
+The index names each service and its domain files:
+
+```json
+{
+  "cache_domains": [
+    { "name": "mygame", "domain_files": ["mygame.txt"] }
+  ]
+}
 ```
 
-Add a game that is not in the list yet:
+Each domain file contains one exact name or wildcard per line. `#` starts a comment; blank lines are ignored. Files are decoded as UTF-8, with a leading byte order mark tolerated. The service name comes from the index rather than the file name. Patterns follow the [configuration reference](04-configuration-reference.md#domainlist).
 
-```jsonc
-"extraDomains": [ { "domain": "*.patch.mygame.example", "service": "mygame" } ]
-```
+</details>
 
-Keep a login host out of a wildcard:
+## Safety limits
 
-```jsonc
-"excludeDomains": ["login.steamcontent.com"]
-```
+The source is parsed as text; it does not supply executable code. Its entries do decide which names routed clients send to your cache, so use a source you trust.
 
-## Pinning the list
+| Protection | Default behavior |
+| :--- | :--- |
+| Request timeout | 30 seconds per file, controlled by `httpTimeoutSeconds`. |
+| File size | Fixed limit of 5 MB per file. |
+| Whole refresh | At most 500 distinct domain-file references, 20 million text characters, and 100,000 patterns across services. |
+| File locations | Index references must stay within the base URL's scheme, host, port, and folder; `..` references are rejected. |
+| Redirects | Content redirected outside that scope is rejected by default. |
 
-The default `baseUrl` follows the `master` branch, so every refresh may change the list. To control updates, point at a
-tag or commit:
+Whole-refresh limits are configurable under [`security`](04-configuration-reference.md#security). Redirect checks examine the response after the target request has already been sent, then discard out-of-scope content unread. Disabling this check permits redirected content from elsewhere and produces a warning. Plain HTTP sources also produce a warning because the content is not authenticated or encrypted in transit.
 
-```jsonc
-"baseUrl": "https://raw.githubusercontent.com/uklans/cache-domains/<tag-or-commit>/"
-```
+---
 
-or host the files yourself and use that URL. The list is only text that the app parses; no code from it is ever run.
-A wrong or malicious entry could however send clients of a routed network to the cache for that name, which is why
-pinning is available.
-
-## Cron cheat sheet
-
-| Expression | Meaning |
-|---|---|
-| `0 4 * * *` | every day at 04:00 (default) |
-| `30 3 * * 1` | Mondays at 03:30 |
-| `0 */6 * * *` | every six hours |
-| `0 4 1 * *` | the first of every month at 04:00 |
-| `0 4 1 */3 *` | the first of January, April, July and October at 04:00 (any distance works, even a year) |
-| `30 0 4 * * *` | six fields: with seconds first – every day at 04:00:30 |
-
-Times are in the Technitium process's time zone (set `TZ` on the container). Five fields are
-`minute hour day-of-month month day-of-week`.
+**Related:** [Domain settings](04-configuration-reference.md#domainlist) · [Troubleshoot a missing match](09-operations.md#why-is-this-name-not-answered-with-the-cache)

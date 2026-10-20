@@ -1,46 +1,55 @@
-# 1. Overview
+# Overview
 
-## What problem does it solve?
+[Documentation](README.md) / Overview
 
-A LanCache stores game downloads locally. To use it, clients must resolve the download hostnames
-(`cdn.steamcontent.com`, `*.download.epicgames.com`, …) to the **cache server's IP address instead of the real CDN**.
-That is done in DNS. The classic way is a DNS server that rewrites those names unconditionally (for example the stock `lancache-dns`).
+A local download cache is most useful when clients can reach it quickly and reliably. LanCache Router adds that decision to Technitium DNS Server: which network should use which cache, and is that cache ready to serve it?
 
-That has three weaknesses:
+## Where it fits
 
-1. **It does not know whether the cache is alive.** If the cache server is down, clients are still told to use it, and
-   downloads fail instead of falling back to the internet.
-2. **It treats every client the same.** If only some VLANs have a fast path to the cache (for example no firewall in
-   between), the others get sent to it anyway and may bottleneck on a firewall.
-3. **It supports one cache.**
+You run Technitium for DNS and LanCache for download storage. The app connects the two through DNS answers. For a listed download domain, a client on a routed network receives the selected cache's IPv4 address. The client then connects directly to the cache.
 
-LanCache Router addresses all three inside the DNS server itself, as **one Technitium app**.
+If that cache becomes unhealthy, the app selects a healthy standby from the route. If there is no standby available, it leaves the lookup to Technitium. Normal resolution can then return the service's public download address, subject to your existing DNS rules.
 
-## What the app does
+This works well for a LAN party, a gaming room, or several VLANs with different access to shared storage. For example:
 
-| Capability | In short |
-|---|---|
-| **Domain list** | Downloads the list of cacheable domains from [uklans/cache-domains](https://github.com/uklans/cache-domains) on a schedule you set with a cron expression. |
-| **Cache servers** | You define any number of cache servers, each with one IPv4 address and a health check. |
-| **Health checking** | Every enabled server is probed (TCP or HTTP). It is only handed out while **Healthy**. |
-| **Routing table** | A table of *client network → cache server* rows, each with a priority, a behavior and an ordered list of servers (the later ones are failovers). |
-| **Safe by default** | Clients that match no row, domains that are not in the list, and unhealthy caches are all handled by normal DNS. |
+| Client network | Your routing choice |
+| :--- | :--- |
+| Gaming PCs | Use the nearby cache, with a second cache as standby. |
+| Another building | Use that building's cache first. |
+| Guests and servers | Keep normal DNS resolution. |
+| One test machine | Exempt it from its subnet's cache route. |
 
-## What the app does *not* do
+## What you need
 
-- It does not cache anything itself. It only decides which IP address a DNS answer contains.
-- It does not move traffic. Clients connect to the cache directly.
-- It does not touch queries that are not for cache domains, or from clients that are not routed.
-- It does not manage the LanCache server (monolithic container), only checks that it answers.
+You need a compatible Technitium DNS Server installation, a working LanCache server, and clients that send their DNS queries to Technitium. The DNS server must see their source addresses to distinguish networks and must be able to reach the caches for health checks.
 
-## Concepts
+The app obtains download hostnames from the community cache-domain list and can keep a saved copy through restarts. You can select services or add and exclude individual domains.
+
+## What to expect
+
+| Feature | Behavior |
+| :--- | :--- |
+| Network selection | Explicit routes match a client's IPv4 or IPv6 subnet. Unmatched clients use normal DNS. |
+| Server selection | Each route uses its first healthy cache. Later entries are standbys. |
+| Health checks | TCP, HTTP, or HTTPS probes run from each DNS node. |
+| Domain updates | Scheduled downloads, service filters, and manual additions. |
+| Recovery | A preferred cache returns to use after passing its recovery checks. |
+
+DNS changes take effect on subsequent lookups. Cached answers may remain in use until their TTL expires, and connections already open to a cache continue independently. The app does not measure download speed or distribute traffic evenly across servers.
+
+Cache server addresses are currently IPv4 only. By default, matching AAAA, HTTPS, and SVCB queries receive empty answers so clients use the cache's IPv4 address. See [DNS answers](08-dns-answers.md) and [limitations](10-limitations-and-roadmap.md) for the details.
+
+## A few terms used in these guides
 
 | Term | Meaning |
-|---|---|
-| **Cache domain** | A hostname from the domain list, for example `lancache.steamcontent.com`. Belongs to a *service* such as `steam`. |
-| **Service** | A group of domains for one platform (`steam`, `epicgames`, `blizzard`, `wsus`, …), named in `cache_domains.json`. |
-| **Cache server** | An entry in `cacheServers`: a name, one IPv4 address and a health check. |
-| **Route** | One row of the routing table. |
-| **Passthrough** | The app does nothing; Technitium resolves the query as it always would. |
-| **Healthy / Unknown / Unhealthy / Disabled** | The state of a cache server. Only **Healthy** servers are used. See [Health checks](06-health-checks.md). |
-| **Failover** | A route lists its servers in order of preference; if the first is not Healthy the next one is used, and so on. |
+| :--- | :--- |
+| Cache domain | A hostname or wildcard in the active download-domain list. |
+| Service | A named group of domains, such as `steam` or `epicgames`. |
+| Cache server | A named cache address and its health-check settings. |
+| Route | A client subnet, a priority, and an ordered list of cache servers or a passthrough rule. |
+| Passthrough | The app leaves the query to Technitium's normal processing. |
+| Healthy | The server has met the configured success threshold and can be selected. |
+
+---
+
+**Next:** [Install your first cache route](03-installation.md) or [follow a DNS lookup](02-how-it-works.md).

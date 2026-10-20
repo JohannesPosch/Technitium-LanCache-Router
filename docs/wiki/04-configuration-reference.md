@@ -1,248 +1,193 @@
-# 4. Configuration reference
+# Configuration reference
 
-The configuration is one JSON document, edited in the Technitium web UI under **Apps → LanCacheRouter → Config**
-(stored as `dnsApp.config`).
+[Documentation](README.md) / Configuration reference
 
-## Rules that apply to the whole document
+Edit the JSON document under **Apps → LanCacheRouter → Config** in Technitium. It is stored as `dnsApp.config`. Start with the [installation example](03-installation.md#3-configure-your-first-route), then add the settings you need.
 
-- **Comments and trailing commas are allowed** (`// like this`, `/* or this */`), because the document is edited by hand.
-- **Property names are case-sensitive camelCase.** Enum values are camelCase strings (`"cacheIfHealthy"`).
-- **Unknown properties are rejected.** A typo such as `"rotes"` makes the save fail instead of being silently ignored.
-- **Everything has a default.** A minimal configuration is just `cacheServers` and `routes`.
-- **All problems are reported together** when validation fails, and the previous configuration stays active.
-- Durations are whole **seconds**, at most 86400 (one day). Thresholds are counts of **consecutive** probe results.
-- The configuration is **shared by all cluster nodes**, so it must not contain node-specific values.
-- A missing configuration (no `dnsApp.config`) is treated as `{ "enabled": false }`.
+**Jump to:** [Master switch](#enabled) · [Domains](#domainlist) · [Health checks](#health-check-settings) · [Servers](#cacheservers) · [Routes](#routes) · [DNS](#dns) · [Security](#security) · [Logging](#logging)
 
-## Overview
+## Editing rules
 
-```jsonc
-{
-  "enabled": true,
-  "domainList":          { … },   // where the cache domains come from
-  "healthCheckDefaults": { … },   // health check values shared by all servers
-  "cacheServers":        [ … ],   // the caches
-  "routes":              [ … ],   // which client network uses which cache
-  "dns":                 { … },   // what the DNS answers look like
-  "security":            { … },   // protective checks (on by default)
-  "logging":             { … }    // extra logging
-}
-```
+- Use case-sensitive camelCase property names. Unknown properties are rejected. Use the enum spellings shown here, such as `cacheIfHealthy` and `nodata`.
+- Comments and trailing commas are accepted. Omitted settings keep their defaults; required names, addresses, and route details must still be supplied.
+- Durations are integer seconds from `1` to `86400`. Probe thresholds are positive integers counting consecutive results.
+- Invalid settings reject the save and leave the previous configuration active. Validation reports the problems it finds together; a malformed document may need its JSON errors fixed first.
+- Configuration is shared across a Technitium cluster. Use settings that work from every node.
 
-## `enabled`
-
-| | |
-|---|---|
-| Type / default | boolean, `true` |
-| Effect | Master switch. `false`: every query is passed through, **no health probes are sent and nothing is downloaded**. Switching back to `true` starts everything again, including a domain-list refresh. |
-
----
-
-## `domainList`
-
-Where the cache domains come from and how they are filtered. Details in [Domain list](07-domain-list.md).
-
-| Option | Type, default | Valid values | Effect |
-|---|---|---|---|
-| `baseUrl` | string, `https://raw.githubusercontent.com/uklans/cache-domains/master/` | absolute `http(s)` URL without credentials (`user:password@` is rejected); a missing trailing `/` is added | Folder that contains `cache_domains.json` and the domain files. Point it at a tag or commit (`…/cache-domains/<commit>/`) to **pin** the list, or at a mirror you host. **Changing it triggers an immediate download.** A plain `http://` URL is accepted but produces a **warning**: the list is then neither encrypted nor authenticated. |
-| `refreshCron` | string, `"0 4 * * *"` | cron expression with **5 fields** (`min hour day month weekday`) or **6 fields** (leading `seconds`) | When the list is downloaded again. Evaluated in the **time zone of the Technitium process** (see below). Each node adds a random delay of 0–2 minutes. |
-| `refreshOnStartup` | boolean, `true` | | Download once when the app first starts. Even when `false`, a download happens at start if there is **no list at all** (no snapshot yet). |
-| `httpTimeoutSeconds` | integer, `30` | 1–86400 | Timeout for **each** HTTP request (the index and each domain file). |
-| `services.include` | string array, `[]` | service names, case-insensitive | If not empty, **only** these services are used. |
-| `services.exclude` | string array, `[]` | service names, case-insensitive | These services are left out. A service in both lists is an error. |
-| `extraDomains` | array, `[]` | objects `{ "domain": "...", "service": "..." }` | Domains added by hand, **always active** (not affected by `services.include/exclude`). `service` defaults to `"custom"`. |
-| `excludeDomains` | string array, `[]` | domain patterns | Names matching these patterns are **never** treated as cache domains, even if a service contains them. |
-
-**Domain patterns** (in `extraDomains` and `excludeDomains`):
-
-| Pattern | Matches |
-|---|---|
-| `example.com` | exactly `example.com` |
-| `*.example.com` | `a.example.com`, `a.b.example.com`, … – **not** `example.com` itself |
-
-Patterns are case-insensitive, must have at least two labels (`*.com` and `com` are rejected), and only letters,
-digits, `-` and `_` are allowed in labels.
-
-**Time zone.** There is no time-zone setting. `refreshCron` uses the time zone of the Technitium process; in Docker set
-the `TZ` environment variable on the **Technitium** container (for example `TZ=Europe/Berlin`).
-
-**Examples**
-
-```jsonc
-"domainList": {
-  "refreshCron": "30 3 * * 1",                          // Mondays at 03:30
-  "services": { "exclude": ["test"] },                   // drop the lancache test domains
-  "extraDomains": [ { "domain": "*.patch.mygame.example", "service": "mygame" } ],
-  "excludeDomains": ["login.steamcontent.com"]           // carve one name out of a wildcard
-}
-```
-
----
-
-## `healthCheckDefaults` and `cacheServers[].healthCheck`
-
-Both blocks have the **same options**. `healthCheckDefaults` applies to every server; a server's own `healthCheck`
-overrides single values of it. Anything set in neither place uses the built-in value.
-
-> Order of precedence, per option: **server `healthCheck`** → **`healthCheckDefaults`** → **built-in value**.
-
-Details in [Health checks](06-health-checks.md).
-
-| Option | Type, built-in value | Valid values | Effect |
-|---|---|---|---|
-| `type` | string, `"http"` | `tcp`, `http`, `https`, `none` | How a server is probed. `tcp`: connection succeeds. `http`/`https`: GET succeeds with an expected status. `none`: never probed, **always Healthy** (testing, or caches you cannot probe). |
-| `port` | integer, `80` | 1–65535 | TCP port that is probed. |
-| `path` | string, `"/lancache-heartbeat"` | must start with `/` | Request path for `http`/`https`. The lancache monolithic container answers this path with `204`. |
-| `expectedStatus` | integer array, `[200, 204]` | non-empty, each 100–599 | Status codes that count as success for `http`/`https`. Redirects are **not** followed, so a `301` is a failure unless you list it. |
-| `intervalSeconds` | integer, `10` | 1–86400 | Time between two probes of a server. |
-| `timeoutSeconds` | integer, `2` | 1–86400, **and ≤ `intervalSeconds`** (checked on the effective values) | A probe that takes longer counts as failed. |
-| `failThreshold` | integer, `2` | ≥ 1 | Consecutive failed probes before a server becomes **Unhealthy**. |
-| `successThreshold` | integer, `3` | ≥ 1 | Consecutive successful probes before a server becomes **Healthy**. |
-| `verbose` | boolean, `false` | | Log **every** probe result, not only state changes. |
-| `startupProbe.enabled` | boolean, `true` | | Probe immediately when the app starts and use the fast interval until the server leaves *Unknown*. If `false`, the first probe is delayed by a random part of the interval. |
-| `startupProbe.fastIntervalSeconds` | integer, `1` | 1–86400 | Probe interval while a server is *Unknown*. |
-
----
-
-## `cacheServers`
-
-A list of cache servers. Routes refer to them by name.
-
-| Option | Type, default | Valid values | Effect |
-|---|---|---|---|
-| `name` | string, **required** | unique, case-insensitive | Name used by `routes[].servers` and in logs. |
-| `enabled` | boolean, `true` | | `false` = state **Disabled**: not probed, never handed out. Re-enabling starts it as *Unknown*. |
-| `address` | string, **required** | one IPv4 address (four dotted parts); not `0.0.0.0` or `255.255.255.255` | The address that is probed and returned in answers. IPv6 is not supported in v1. |
-| `healthCheck` | object, none | see above | Per-server overrides of the health check. |
-
-One server has **exactly one address**. For more capacity or redundancy define more servers and list them in a route's `servers`.
-
-```jsonc
-"cacheServers": [
-  { "name": "monolith-1", "address": "192.168.17.44", "healthCheck": { "type": "tcp" } },
-  { "name": "monolith-2", "address": "192.168.18.44" },                     // uses the HTTP defaults
-  { "name": "spare",      "address": "192.168.19.44", "enabled": false }      // defined but off
-]
-```
-
----
-
-## `routes`
-
-The routing table. Details in [Routing](05-routing.md).
-
-| Option | Type, default | Valid values | Effect |
-|---|---|---|---|
-| `priority` | integer, **required in practice** (default `0`) | unique across rows | Evaluation order: **lowest number first; the first matching row wins.** |
-| `sourceCidr` | string, **required** | IPv4 or IPv6 CIDR (`192.168.17.0/24`); a bare address is a host route (`127.0.0.1` = `/32`) | The client network this row applies to. Host bits are ignored (`192.168.17.5/24` = `192.168.17.0/24`). |
-| `behavior` | string, `"cacheIfHealthy"` | `cacheIfHealthy`, `passthrough` | `cacheIfHealthy`: answer with the first Healthy server of `servers`. `passthrough`: do nothing for this network. |
-| `servers` | list of strings | names of cache servers, no duplicates | Servers in **order of preference**: the first Healthy one answers, so later entries are failovers. If none is Healthy the query is passed through. **At least one required** for `cacheIfHealthy`; ignored (with a warning) for `passthrough`. |
-| `enabled` | boolean, `true` | | `false` removes the row from evaluation without deleting it. |
-| `comment` | string | | For humans; not used. |
-
-**Implicit default row:** clients that match no enabled row are **passed through**. You never need to write a catch-all.
-
-**Warnings** (the configuration is still accepted): a row that an earlier, wider row makes unreachable
-(`routes[priority=20] (192.168.17.0/24) is never used: shadowed by priority 10 (192.168.0.0/16)`), `servers` on a
-`passthrough` row.
-
-```jsonc
-"routes": [
-  { "priority": 10, "sourceCidr": "127.0.0.1/32",    "servers": ["monolith-1"] },                       // local test
-  { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1", "monolith-2"] },
-  { "priority": 30, "sourceCidr": "192.168.20.0/24", "behavior": "passthrough", "comment": "servers VLAN" }
-]
-```
-
----
-
-## `dns`
-
-What the answers look like. Details in [DNS answers](08-dns-answers.md).
-
-| Option | Type, default | Valid values | Effect |
-|---|---|---|---|
-| `ttl` | integer, `60` | 1–86400 | TTL in seconds of A records **and** of the negative (no-data) answers. Short on purpose: it is how quickly clients notice that a cache became unhealthy. |
-| `aaaaMode` | string, `"nodata"` | `nodata`, `passthrough` | `nodata`: AAAA queries for cache domains get an empty answer so dual-stack clients cannot bypass the cache over IPv6. `passthrough`: resolved normally (the client may then reach the real CDN over IPv6). |
-| `httpsMode` | string, `"nodata"` | `nodata`, `passthrough` | The same for `HTTPS` and `SVCB` queries (type 65/64), whose address hints could also bypass the cache. |
-
----
-
-## `security`
-
-Protective checks and limits. The checks are **on by default**; this section exists to switch one off if your setup
-needs that, which produces a warning each time the configuration is applied. The limits bound what one download of the
-domain list may use; the defaults are far above the real list (a few kilobytes, about 130 entries) and rarely need a change.
-
-| Option | Type, default | Effect |
-|---|---|---|
-| `restrictDownloadRedirects` | boolean, `true` | The HTTP client follows redirects. With this check on, a download of the domain list is **rejected** if it ended up anywhere but the `baseUrl` folder (another scheme, host or port, or a path above the base path). Without it, a redirecting index or mirror could make the Technitium server fetch and read any URL it can reach. Turn it off only for a mirror that redirects on purpose (for example from `http` to `https` or to a CDN). The check inspects the response, so the request to the redirect target has already been sent when it is rejected; its content is discarded and never parsed. |
-| `maxDomainFiles` | integer, `500` | ≥ 1 | Most distinct domain files (the index not counted) one download may fetch. |
-| `maxDomainListCharacters` | integer, `20000000` | ≥ 1 | Most text, summed over the index and all domain files, one download may read. Each file is also limited to 5 MB. |
-| `maxDomainPatterns` | integer, `100000` | ≥ 1 | Most patterns, summed over all services, one download may produce (a file that several services list counts once per service). |
-
-A download that exceeds a limit fails as a whole: the previous list stays active and the refresh is retried (the log
-says which limit was hit).
-
-To switch the check off set `"security": { "restrictDownloadRedirects": false }`.
-
----
-
-## `logging`
-
-| Option | Type, default | Effect |
-|---|---|---|
-| `queries` | boolean, `false` | Log one line for **every query the app answers**: `Answered <client> <type> <name> [<service>] -> <server> (<address>)`. Use it to debug routing; turn it off afterwards. State changes, list refreshes, warnings and errors are always logged. |
-| `verbose` | boolean, `false` | Debug mode. Logs **why** every decision was made: each query the app passes through with the reason (`client matches no route`, `server 'x' is not Healthy`, `not a cache domain`, …), every health probe result (as if `verbose` were set on all health checks), per-service pattern counts and download details of list refreshes, and the effective servers, health checks and routes whenever the config is applied. Implies `queries`. Very chatty on a busy server (every DNS query is logged); turn it off afterwards. |
-
----
+The `enabled` property defaults to `true` in a supplied document. The packaged configuration explicitly sets it to `false`, and a missing or blank configuration is treated as disabled.
 
 ## Complete example
 
-A complete configuration with two cache servers, the second one used as failover:
+Two caches serve the gaming subnet, with `cache-2` as standby. The test PC is exempt. Replace addresses and networks before saving.
 
 ```jsonc
 {
   "enabled": true,
-
   "domainList": {
     "refreshCron": "0 4 * * *",
     "services": { "exclude": ["test"] }
   },
-
   "healthCheckDefaults": {
-    "type": "tcp", "port": 80,
-    "intervalSeconds": 10, "timeoutSeconds": 2, "failThreshold": 2, "successThreshold": 3
+    "type": "http",
+    "port": 80,
+    "path": "/lancache-heartbeat",
+    "expectedStatus": [200, 204],
+    "intervalSeconds": 10,
+    "timeoutSeconds": 2,
+    "failThreshold": 2,
+    "successThreshold": 3
   },
-
   "cacheServers": [
-    { "name": "monolith-1", "address": "192.168.17.44" },
-    { "name": "monolith-2", "address": "192.168.18.44", "enabled": false }
+    { "name": "cache-1", "address": "192.168.17.44" },
+    { "name": "cache-2", "address": "192.168.18.44" }
   ],
-
   "routes": [
-    { "priority": 10, "sourceCidr": "127.0.0.1/32" , "servers": ["monolith-1"] },
-    { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1", "monolith-2"] }
+    {
+      "priority": 10,
+      "sourceCidr": "192.168.17.99/32",
+      "behavior": "passthrough",
+      "comment": "Test PC"
+    },
+    {
+      "priority": 20,
+      "sourceCidr": "192.168.17.0/24",
+      "servers": ["cache-1", "cache-2"]
+    }
   ],
-
-  "dns": { "ttl": 60 },
-  "security": { "restrictDownloadRedirects": true, "maxDomainFiles": 500, "maxDomainListCharacters": 20000000, "maxDomainPatterns": 100000 },
+  "dns": { "ttl": 60, "aaaaMode": "nodata", "httpsMode": "nodata" },
   "logging": { "queries": false, "verbose": false }
 }
 ```
 
+Security and other omitted options retain the defaults below.
+
+## `enabled`
+
+Boolean; default `true`.
+
+Set `false` to pass every query through and stop health probes and list downloads. Re-enabling restarts health tracking and applies the startup domain-refresh rules. This differs from disabling a single server or route.
+
+## `domainList`
+
+Controls the domain source, refresh schedule, and filters. See [Domain list](07-domain-list.md) for examples and matching behavior.
+
+The `services` object holds the `include` and `exclude` arrays. Each `extraDomains` entry has a `domain` and a `service` label.
+
+| Setting | Default | Accepted values and effect |
+| :--- | :--- | :--- |
+| `baseUrl` | `https://raw.githubusercontent.com/uklans/cache-domains/master/` | Absolute HTTP(S) folder URL containing `cache_domains.json` and the referenced files. No embedded credentials. A trailing slash is added when fetching. Changing the source triggers a download. Plain HTTP is accepted with a warning. |
+| `refreshCron` | `"0 4 * * *"` | Five cron fields, or six with leading seconds. Uses the Technitium process's time zone, with a per-node delay of up to two minutes. |
+| `refreshOnStartup` | `true` | Download on startup even if a saved list exists. With `false`, startup still downloads if no list is available. |
+| `httpTimeoutSeconds` | `30` | `1–86400`; timeout for each individual request. |
+| `services.include` | `[]` | Case-insensitive service names. Empty means all services; otherwise only listed services are included. |
+| `services.exclude` | `[]` | Case-insensitive service names to omit. A name in both filters is an error. |
+| `extraDomains` | `[]` | Objects with a required `domain` pattern and an optional `service` label, default `"custom"`. Added regardless of service filters once a base list is available. |
+| `excludeDomains` | `[]` | Patterns that exclude matching query names, including names covered by a broader included wildcard. |
+
+Set the process time zone on the host or, for a container, with `TZ` where supported. There is no app time-zone option.
+
+Patterns use exact names (`example.com`) or leading wildcards (`*.example.com`). A wildcard matches subdomains at any depth, but excludes the base name itself. Matching ignores case and trailing dots. Patterns require at least two labels; labels use ASCII letters, digits, underscores, and hyphens, with no leading or trailing hyphen. A label is at most 63 characters; the name without the wildcard prefix is at most 253 characters. Bare TLDs and `*.com` are rejected.
+
+## Health-check settings
+
+Use these options in `healthCheckDefaults` or in a server's `healthCheck`. Each option is resolved independently: server override, then shared default, then built-in value. See [Health checks](06-health-checks.md) for timing and state transitions.
+
+The `startupProbe` object groups its `enabled` and `fastIntervalSeconds` settings.
+
+| Setting | Built-in value | Accepted values and effect |
+| :--- | :--- | :--- |
+| `type` | `"http"` | `tcp`, `http`, `https`, or `none`. `none` skips probing and treats the enabled server as Healthy. |
+| `port` | `80` | `1–65535`. HTTPS also retains port 80 unless you change it. |
+| `path` | `"/lancache-heartbeat"` | Must begin with `/`; used for HTTP(S). |
+| `expectedStatus` | `[200, 204]` | Non-empty array of status codes from `100` to `599`. HTTP(S) redirects are not followed. |
+| `intervalSeconds` | `10` | `1–86400`; delay after each completed probe. |
+| `timeoutSeconds` | `2` | `1–86400`; must not exceed the effective `intervalSeconds`. |
+| `failThreshold` | `2` | Integer at least `1`; consecutive failures before Unhealthy. |
+| `successThreshold` | `3` | Integer at least `1`; consecutive successes before Healthy. |
+| `verbose` | `false` | Log every probe for this server. Changing it resets that server's health tracking. |
+| `startupProbe.enabled` | `true` | Probe immediately and use the fast interval while Unknown. Otherwise start after a randomized normal-interval delay. |
+| `startupProbe.fastIntervalSeconds` | `1` | `1–86400`; delay between completed probes while Unknown and startup probing is enabled. |
+
+HTTPS probes skip certificate validation. Their result establishes endpoint liveness, not the identity or trustworthiness of its certificate.
+
+## `cacheServers`
+
+Array; default `[]`. Each entry defines one cache address.
+
+| Setting | Default | Accepted values and effect |
+| :--- | :--- | :--- |
+| `name` | Required | Non-empty, unique without case sensitivity. Routes use this name. |
+| `address` | Required | One IPv4 address in four-part dotted notation. `0.0.0.0`, `255.255.255.255`, and addresses with a first octet of `224` or higher are rejected. |
+| `enabled` | `true` | `false` makes the server Disabled: no probes and no selection. |
+| `healthCheck` | No overrides | Any of the health-check settings above. |
+
+Define additional server entries for standby caches. Each route selects one server at a time; adding entries does not distribute load between them.
+
+## `routes`
+
+Array; default `[]`. See [Routing](05-routing.md) for practical patterns.
+
+| Setting | Default | Accepted values and effect |
+| :--- | :--- | :--- |
+| `priority` | `0` | Integer, unique across all routes. Set it explicitly: lowest number is evaluated first. |
+| `sourceCidr` | Required | IPv4 or IPv6 CIDR, or a bare host address. Host bits are ignored. |
+| `behavior` | `"cacheIfHealthy"` | `cacheIfHealthy` selects the first Healthy listed server; `passthrough` leaves the query to Technitium. |
+| `servers` | `[]` | Ordered names of existing cache servers, without duplicates. Required and non-empty for `cacheIfHealthy`; ignored with a warning on `passthrough`. |
+| `enabled` | `true` | `false` skips the route. A later route may then match. |
+| `comment` | Unset | Optional text for maintainers. |
+
+The first matching enabled route wins. If it has no Healthy server, the app passes through rather than trying a later route. A client matching no route also passes through. A route entirely covered by an earlier enabled route produces a shadowing warning.
+
+## `dns`
+
+See [DNS answers](08-dns-answers.md) for response details.
+
+| Setting | Default | Accepted values and effect |
+| :--- | :--- | :--- |
+| `ttl` | `60` | `1–86400`; lifetime in seconds of synthesized A answers and negative no-data answers. |
+| `aaaaMode` | `"nodata"` | `nodata` returns an empty successful answer for eligible AAAA queries. `passthrough` allows normal resolution, which can let clients bypass the IPv4 cache. |
+| `httpsMode` | `"nodata"` | Same modes for both HTTPS and SVCB queries, preventing address hints from bypassing the cache by default. |
+
+These modes apply only when the route, health, and domain checks have passed. They do not suppress AAAA or service records for unrelated domains or unrouted clients.
+
+## `security`
+
+Controls domain-download protection and resource limits. Every numeric limit must be at least `1`. Exceeding a limit rejects that refresh and retains the previous list.
+
+| Setting | Default | Effect |
+| :--- | :--- | :--- |
+| `restrictDownloadRedirects` | `true` | Reject responses redirected outside the source's scheme, host, port, or base path. Setting `false` allows such redirected content and logs a warning. |
+| `maxDomainFiles` | `500` | Maximum distinct domain-file references fetched in one refresh; excludes the index. |
+| `maxDomainListCharacters` | `20000000` | Maximum total text characters across the index and domain files. |
+| `maxDomainPatterns` | `100000` | Maximum patterns across services. A pattern used by multiple services counts for each service. |
+
+Each downloaded file also has a fixed 5 MB limit. Index file references must remain within the base URL even when redirect restriction is disabled. The redirect check happens **after** the target request has been sent; rejected response content is discarded unread. See [Safety limits](07-domain-list.md#safety-limits).
+
+## `logging`
+
+State changes, list refresh results, configuration warnings, and errors are always logged.
+
+| Setting | Default | Effect |
+| :--- | :--- | :--- |
+| `queries` | `false` | Log each query answered by the app, with client, domain, service, selected server, and its position in the route. |
+| `verbose` | `false` | Include answered queries, passthrough reasons, all health probes, list-download details and service counts, and effective configuration. |
+
+Verbose mode can produce a line for every query reaching the enabled app. Use it briefly when diagnosing a problem. See [Operations](09-operations.md#logging).
+
 ## Validation messages
 
-| Message (shortened) | Cause |
-|---|---|
-| `domainList.refreshCron must have 5 or 6 fields` / `is invalid` | not a valid cron expression |
-| `…address 'x' is not a valid IPv4 address` | typo, IPv6 address, or a shorthand like `10.1` |
-| `security.maxDomainFiles` / `maxDomainListCharacters` / `maxDomainPatterns must be >= 1` | a limit of zero or less would make every download fail |
-| `domainList.baseUrl must not contain credentials (user:password@)` | remove the credentials from the URL; they were never sent and would be logged |
-| `…: duplicate server name` | names are compared ignoring case |
-| `…effective timeoutSeconds (n) must not exceed intervalSeconds (m)` | check the values you set **and** the defaults they combine with |
-| `routes[priority=n]: priority is used more than once` | priorities must be unique |
-| `…: behavior cacheIfHealthy requires at least one server` | missing or empty `servers` |
-| `…servers: server 'x' does not exist` | name mismatch (case does not matter) |
-| `…servers: server 'x' is listed more than once` | a name appears twice in one `servers` list |
-| `invalid JSON: …` | syntax error, an unknown property (`… could not be mapped to any .NET member …`), a wrong value type, or an unknown enum value (`… could not be converted …`); the message names the property path and line |
+| Message or symptom | Check |
+| :--- | :--- |
+| Unknown property or `could not be mapped` | Spelling and case of the property name. |
+| Enum conversion error | Use a documented string value rather than a number. |
+| `must not be null` | Supply an object, array, or value of the expected type; omit optional settings to use defaults. |
+| Invalid IPv4 address | Use the cache's full IPv4 address, not a hostname, IPv6 address, or shorthand. |
+| Duplicate server name or priority | Names are case-insensitive; route priorities must be unique even on disabled entries. |
+| Server does not exist | Match a route's server names to entries in `cacheServers`. |
+| Effective timeout exceeds interval | Check both shared defaults and server overrides. |
+| Invalid cron expression | Use five fields, or six with seconds first. |
+| Route is shadowed | Put narrow exceptions before broader routes. This warning does not reject the save. |
+
+---
+
+**Related:** [Installation](03-installation.md) · [Routing examples](05-routing.md) · [Troubleshooting](09-operations.md)

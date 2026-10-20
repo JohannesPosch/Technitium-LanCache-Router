@@ -1,38 +1,40 @@
-# LanCache Router – Wiki
+# LanCache Router documentation
 
-LanCache Router is an app for the [Technitium DNS Server](https://technitium.com/dns/). It makes game-download
-traffic (Steam, Epic, Battle.net, Windows Update, …) go through a [LanCache](https://lancache.net/) server, and it
-does so **per client network** and **only while the cache is actually healthy**.
+Get your first cache working, then shape routing and failover around your network.
 
-Plain DNS rewriting keeps handing out the cache address even when the cache is down. With this app the address simply
-stops being handed out while the cache is unhealthy, and clients resolve the real CDN again.
+LanCache Router runs inside Technitium DNS Server. It answers supported download domains with a healthy local cache address for the client networks you choose. When a route has no healthy cache, Technitium handles the lookup normally.
 
-## Where to start
+**[Install and try it](03-installation.md)** · [Configuration reference](04-configuration-reference.md) · [Troubleshooting](09-operations.md)
 
-| I want to… | Read |
-|---|---|
-| understand what the app does and why it exists | [1. Overview](01-overview.md) |
-| understand exactly how a query is handled | [2. How it works](02-how-it-works.md) |
-| install it and make a first working setup | [3. Installation](03-installation.md) |
-| look up a setting and see how it changes behavior | [4. Configuration reference](04-configuration-reference.md) |
-| decide which client network uses which cache | [5. Routing](05-routing.md) |
-| tune health checking and failover | [6. Health checks](06-health-checks.md) |
-| control which domains are cached | [7. Domain list](07-domain-list.md) |
-| know what DNS answers look like on the wire | [8. DNS answers](08-dns-answers.md) |
-| run it, read its logs, find out why a name is not cached | [9. Operations and troubleshooting](09-operations.md) |
-| know what it cannot do (yet) | [10. Limitations and roadmap](10-limitations-and-roadmap.md) |
+---
 
-## The idea in one picture
+## Start here
 
-```mermaid
-flowchart LR
-    C["Client<br/>192.168.17.50"] -->|"DNS query:<br/>cdn.steamcontent.com"| T["Technitium DNS Server<br/>+ LanCache Router app"]
-    T -->|"client network routed,<br/>cache healthy,<br/>name is a cache domain"| A["Answer: 192.168.17.44<br/>(the LanCache server)"]
-    T -->|"otherwise"| R["Normal Technitium<br/>resolution"]
-    C -.->|"download"| L["LanCache server"]
-```
+| Guide | What you will find |
+| :--- | :--- |
+| [Overview](01-overview.md) | Where the app fits and what you need to use it. |
+| [Installation](03-installation.md) | Download, configure, and verify a single cache. Build instructions are included. |
+| [How it works](02-how-it-works.md) | Follow a DNS lookup and understand fallback, restarts, and configuration changes. |
 
-## Design records
+## Set up your network
 
-The reasoning behind the design lives in the [architecture decision records](../adr/README.md). The wiki describes what
-the app does; the ADRs describe why. The [backlog](../backlog.md) lists what is deliberately not in version 1.
+| Guide | What you can change |
+| :--- | :--- |
+| [Routing](05-routing.md) | Give VLANs different caches, exempt devices, and add standby servers. |
+| [Health checks](06-health-checks.md) | Choose a probe and control failure and recovery timing. |
+| [Domain list](07-domain-list.md) | Select services, add domains, and schedule updates. |
+| [Configuration reference](04-configuration-reference.md) | Find every setting, default, and validation rule. |
+
+## Run it day to day
+
+| Guide | What you will find |
+| :--- | :--- |
+| [Operations and troubleshooting](09-operations.md) | Read logs, diagnose bypassed caches, and handle maintenance. |
+| [DNS answers](08-dns-answers.md) | Understand IPv6 handling, answer caching, and packet details. |
+| [Limitations and roadmap](10-limitations-and-roadmap.md) | Check supported setups and planned areas of work. |
+
+> **A useful starting point:** one cache, one client subnet, and the default HTTP heartbeat check. Add routing exceptions and standby servers once the first lookup returns your cache address.
+
+## Working on the project
+
+The [architecture decision records](../adr/README.md) document design choices. The [backlog](../backlog.md) tracks deferred features. For the project introduction and source, return to the [repository README](../../README.md).

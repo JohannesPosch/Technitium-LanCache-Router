@@ -1,109 +1,107 @@
-# 5. Routing
+# Routing
 
-The routing table answers one question for every query: **"which cache server, if any, may this client be sent to?"**
-It looks only at the **client's source address** and at the **current health** of the servers.
+[Documentation](README.md) / Routing
 
-## Evaluation rules
+A route connects a client network to an ordered list of caches. Use it to keep downloads local to a VLAN, add a standby, or exempt a device from caching.
 
-1. Only **enabled** rows are considered, in ascending `priority` order (lowest number first).
-2. The **first row whose `sourceCidr` contains the client address wins.** Later rows are not looked at, even if they
-   match more precisely. There is no "longest prefix" rule; priority is explicit.
-3. If no row matches, the query is **passed through**. (This is the implicit default row.)
-4. For the winning row:
+## The two orders that matter
 
-| `behavior` | Result |
-|---|---|
-| `passthrough` | passed through |
-| `cacheIfHealthy` | **answer with the address of the first Healthy server in `servers`** (list order = order of preference); if none is Healthy, passed through |
+**Route priority** decides which rule applies. Enabled routes are checked from the lowest `priority` number upward, and the first matching `sourceCidr` wins. A more specific subnet does not automatically take precedence.
 
-5. **The list is the failover.** Put the preferred server first and the standbys after it, as many as you like. Only
-   the route's own list is consulted; other routes are never looked at, so there are no chains and no loops.
-6. **Failback is automatic.** Every query is evaluated from the top of the list, so as soon as a preferred server is
-   Healthy again (after its `successThreshold` passes, see [Health checks](06-health-checks.md)) it gets its traffic back.
+**Server list order** decides which cache to use. Within the winning route, the app selects the first Healthy server in `servers`. Unknown, Unhealthy, and Disabled servers are skipped. If none is Healthy, the lookup passes through to Technitium; later routes are not considered.
 
-"Not Healthy" means the server is *Unknown*, *Unhealthy*, *Disabled*, or not defined.
+Clients matching no route also pass through. You can leave unrelated networks out of the configuration.
 
-## Decision table: one route with three servers
+## One cache for one subnet
 
-Route: `priority 20, 192.168.17.0/24 → servers [cache-1, cache-2, cache-3]`
-
-| cache-1 | cache-2 | cache-3 | Client in 192.168.17.0/24 gets |
-|---|---|---|---|
-| Healthy | any | any | cache-1 |
-| not Healthy | Healthy | any | **cache-2** (failover) |
-| not Healthy | not Healthy | Healthy | **cache-3** (failover) |
-| not Healthy | not Healthy | not Healthy | real CDN addresses (passthrough) |
-
-Clients outside `192.168.17.0/24` are unaffected by all of this.
-
-## Why priority and not "most specific wins"?
-
-It keeps the table predictable and lets you write deliberate exceptions. Put the narrow rows **before** the wide
-ones:
+The examples below show configuration sections. Define every referenced server in `cacheServers`; the [installation guide](03-installation.md#3-configure-your-first-route) has a complete starting configuration.
 
 ```jsonc
 "routes": [
-  { "priority": 10, "sourceCidr": "192.168.17.99/32", "behavior": "passthrough", "comment": "a PC that must not use the cache" },
-  { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1"] },
-  { "priority": 30, "sourceCidr": "192.168.0.0/16",  "servers": ["monolith-2"] }
+  {
+    "priority": 10,
+    "sourceCidr": "192.168.17.0/24",
+    "servers": ["cache-1"]
+  }
 ]
 ```
 
-If you swapped priorities 10 and 20, the `/32` row could never match, because `192.168.17.0/24` would catch the client
-first. The app tells you: *"`routes[priority=…]` … is never used: shadowed by priority …"* (a warning, not an error).
+Only clients in this subnet are eligible. Their queries must also match the active domain list, and `cache-1` must be Healthy.
 
-## Patterns
+## Add a standby
 
-### One cache for one VLAN, everything else normal
-
-```jsonc
-"routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1"] } ]
-```
-
-### Different cache per VLAN
+List the preferred cache first, followed by its alternatives:
 
 ```jsonc
 "routes": [
-  { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["cache-a"] },
-  { "priority": 20, "sourceCidr": "192.168.18.0/24", "servers": ["cache-b"] }
+  {
+    "priority": 10,
+    "sourceCidr": "192.168.17.0/24",
+    "servers": ["cache-1", "cache-2", "cache-3"]
+  }
 ]
 ```
 
-### Primary with standbys
+| Available servers | Selected cache |
+| :--- | :--- |
+| `cache-1` is Healthy | `cache-1` |
+| Only `cache-2` and `cache-3` are Healthy | `cache-2` |
+| Only `cache-3` is Healthy | `cache-3` |
+| None is Healthy | Normal DNS resolution. |
+
+The preferred cache is selected again as soon as it becomes Healthy. This automatic return affects new lookups; clients can continue using a previous answer until its TTL expires.
+
+## Different caches for different networks
+
+Each route has its own preference list, so two networks can prefer different caches while sharing a standby:
 
 ```jsonc
-{ "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["cache-a", "cache-b", "cache-c"] }
+"routes": [
+  { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["cache-1", "cache-2"] },
+  { "priority": 20, "sourceCidr": "192.168.18.0/24", "servers": ["cache-2", "cache-1"] }
+]
 ```
 
-`cache-a` is used while it is Healthy, then `cache-b`, then `cache-c`. The same servers can appear in other routes, in
-any order; the routes are independent.
+Make sure each network can reach every cache in its own list. Health checks run from the DNS node and cannot prove that a client has the same access.
 
-### Everything except one network
+## Exempt a device or network
 
-There is no negation. Put a `passthrough` row for the exception first and a wide row after it:
+Put the exception before the broader route:
 
 ```jsonc
-{ "priority": 10, "sourceCidr": "192.168.20.0/24", "behavior": "passthrough" },
-{ "priority": 20, "sourceCidr": "0.0.0.0/0",       "servers": ["cache-a"] }
+"routes": [
+  {
+    "priority": 10,
+    "sourceCidr": "192.168.17.99/32",
+    "behavior": "passthrough",
+    "comment": "Test PC uses normal DNS"
+  },
+  {
+    "priority": 20,
+    "sourceCidr": "192.168.17.0/24",
+    "servers": ["cache-1"]
+  }
+]
 ```
 
-### Temporarily switch a row off
+Use the same pattern for a network exception ahead of a wide route such as `0.0.0.0/0`. Omit `servers` on passthrough routes. If an earlier route completely covers a later one, validation warns that the later route is shadowed.
 
-Set `"enabled": false` on the row instead of deleting it. A disabled row takes no part in evaluation or in the
-"shadowed" warning.
+> **Temporarily disable a route:** set its `enabled` to `false`. It is skipped, so a broader enabled route may then match those clients. Use an enabled `passthrough` route when you want an explicit exemption.
 
-### Test from the server itself
+## Address and priority details
 
-Add `{ "priority": 1, "sourceCidr": "127.0.0.1/32", "servers": ["…"] }` and query `@127.0.0.1`.
+| Setting | Rule |
+| :--- | :--- |
+| `priority` | Unique integer across all routes, including disabled ones. Lower numbers are checked first. |
+| `sourceCidr` | IPv4 or IPv6 network. A bare address is a single-host route. Host bits are ignored. |
+| `servers` | Existing server names, compared without case sensitivity; no duplicates within a route. |
+| `behavior` | Defaults to `cacheIfHealthy`. Use `passthrough` for exemptions. |
+| `comment` | Optional note for the people maintaining the configuration. |
 
-## Details worth knowing
+IPv4-mapped IPv6 client addresses are normalized to IPv4 before matching. Write their networks as IPv4 CIDRs rather than mapped IPv6 CIDRs. Native IPv6 clients can match routes such as `fd00:17::/64`, but cache answers still contain IPv4 addresses; [AAAA handling](08-dns-answers.md) is controlled separately.
 
-- **IPv6 clients** are matched against IPv6 rows (`fd00:17::/64`). An IPv4 client that reaches Technitium over a
-  dual-stack socket as `::ffff:192.168.17.50` is treated as IPv4 and matches IPv4 rows.
-- A route can only *answer with IPv4 addresses* in v1. IPv6 clients can be routed, but AAAA answers are always empty
-  (see [DNS answers](08-dns-answers.md)).
-- IPv4-mapped IPv6 clients are normalized to IPv4 *before* matching, so write IPv4 networks as IPv4 (`192.168.17.0/24`). A
-  row such as `::ffff:192.168.17.0/120` is accepted but never matches.
-- Server names in routes are matched **ignoring case**.
-- The routing table is rebuilt on every configuration save and switched over atomically.
-- The client address is what Technitium sees. See [Installation → Client addresses](03-installation.md#client-addresses).
+To test from the DNS host itself, add a route for `127.0.0.1/32` with a unique priority and your actual cache name, then query `@127.0.0.1`. A test from the host does not exercise a remote client's subnet route.
+
+---
+
+**Related:** [Health checks](06-health-checks.md) · [Configuration reference](04-configuration-reference.md#routes) · [Troubleshooting](09-operations.md)
