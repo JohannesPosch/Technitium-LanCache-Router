@@ -23,7 +23,7 @@ public sealed class RoutingDecision
     /// <summary>
     /// The decision for clients that match no route, or whose route is a passthrough.
     /// </summary>
-    public static readonly RoutingDecision DefaultPassthrough = new(RoutingOutcome.Passthrough, null, null, false);
+    public static readonly RoutingDecision DefaultPassthrough = new(RoutingOutcome.Passthrough, null, null, 0);
 
     /// <summary>
     /// Creates a decision.
@@ -31,13 +31,13 @@ public sealed class RoutingDecision
     /// <param name="outcome">What to do with the query.</param>
     /// <param name="server">The server to answer with; only set for <see cref="RoutingOutcome.Cache"/>.</param>
     /// <param name="route">The route that matched, or <c>null</c> if none did.</param>
-    /// <param name="failedOver">Whether <paramref name="server"/> is the route's failover server instead of its primary.</param>
-    internal RoutingDecision(RoutingOutcome outcome, ServerHealth? server, RouteConfig? route, bool failedOver)
+    /// <param name="position">1-based position of <paramref name="server"/> in the route's server list; 0 if no server was chosen.</param>
+    internal RoutingDecision(RoutingOutcome outcome, ServerHealth? server, RouteConfig? route, int position)
     {
         Outcome = outcome;
         Server = server;
         Route = route;
-        FailedOver = failedOver;
+        Position = position;
     }
 
     /// <summary>
@@ -56,7 +56,12 @@ public sealed class RoutingDecision
     public RouteConfig? Route { get; }
 
     /// <summary>
-    /// <c>true</c> if the route's primary server was not usable and its failover server is used instead. For logging.
+    /// 1-based position of <see cref="Server"/> in the route's server list, or 0 if no server was chosen. For logging.
     /// </summary>
-    public bool FailedOver { get; }
+    public int Position { get; }
+
+    /// <summary>
+    /// <c>true</c> if a more preferred server of the route was not usable, so a later one answers. For logging.
+    /// </summary>
+    public bool FailedOver => Position > 1;
 }

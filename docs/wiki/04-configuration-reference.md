@@ -109,12 +109,12 @@ A list of cache servers. Routes refer to them by name.
 
 | Option | Type, default | Valid values | Effect |
 |---|---|---|---|
-| `name` | string, **required** | unique, case-insensitive | Name used by `routes[].server` and `failover.server`, and in logs. |
+| `name` | string, **required** | unique, case-insensitive | Name used by `routes[].servers` and in logs. |
 | `enabled` | boolean, `true` | | `false` = state **Disabled**: not probed, never handed out. Re-enabling starts it as *Unknown*. |
 | `address` | string, **required** | one IPv4 address (four dotted parts); not `0.0.0.0` or `255.255.255.255` | The address that is probed and returned in answers. IPv6 is not supported in v1. |
 | `healthCheck` | object, none | see above | Per-server overrides of the health check. |
 
-One server has **exactly one address**. For more capacity or redundancy define more servers and use route failover.
+One server has **exactly one address**. For more capacity or redundancy define more servers and list them in a route's `servers`.
 
 ```jsonc
 "cacheServers": [
@@ -134,24 +134,21 @@ The routing table. Details in [Routing](05-routing.md).
 |---|---|---|---|
 | `priority` | integer, **required in practice** (default `0`) | unique across rows | Evaluation order: **lowest number first; the first matching row wins.** |
 | `sourceCidr` | string, **required** | IPv4 or IPv6 CIDR (`192.168.17.0/24`); a bare address is a host route (`127.0.0.1` = `/32`) | The client network this row applies to. Host bits are ignored (`192.168.17.5/24` = `192.168.17.0/24`). |
-| `behavior` | string, `"cacheIfHealthy"` | `cacheIfHealthy`, `passthrough` | `cacheIfHealthy`: answer with `server` while it is Healthy. `passthrough`: do nothing for this network. |
-| `server` | string | name of a cache server | Primary server. **Required** for `cacheIfHealthy`; ignored (with a warning) for `passthrough`. |
-| `failover.action` | string, `"passthrough"` | `passthrough`, `failover` | What happens if the primary server is not Healthy. |
-| `failover.server` | string | name of another cache server | **Required** for `action: "failover"`; must differ from `server`. |
+| `behavior` | string, `"cacheIfHealthy"` | `cacheIfHealthy`, `passthrough` | `cacheIfHealthy`: answer with the first Healthy server of `servers`. `passthrough`: do nothing for this network. |
+| `servers` | list of strings | names of cache servers, no duplicates | Servers in **order of preference**: the first Healthy one answers, so later entries are failovers. If none is Healthy the query is passed through. **At least one required** for `cacheIfHealthy`; ignored (with a warning) for `passthrough`. |
 | `enabled` | boolean, `true` | | `false` removes the row from evaluation without deleting it. |
 | `comment` | string | | For humans; not used. |
 
 **Implicit default row:** clients that match no enabled row are **passed through**. You never need to write a catch-all.
 
 **Warnings** (the configuration is still accepted): a row that an earlier, wider row makes unreachable
-(`routes[priority=20] (192.168.17.0/24) is never used: shadowed by priority 10 (192.168.0.0/16)`), a `server` on a
-`passthrough` row, a `failover.server` with action `passthrough`.
+(`routes[priority=20] (192.168.17.0/24) is never used: shadowed by priority 10 (192.168.0.0/16)`), `servers` on a
+`passthrough` row.
 
 ```jsonc
 "routes": [
-  { "priority": 10, "sourceCidr": "127.0.0.1/32",    "server": "monolith-1" },                       // local test
-  { "priority": 20, "sourceCidr": "192.168.17.0/24", "server": "monolith-1",
-    "failover": { "action": "failover", "server": "monolith-2" } },
+  { "priority": 10, "sourceCidr": "127.0.0.1/32",    "servers": ["monolith-1"] },                       // local test
+  { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1", "monolith-2"] },
   { "priority": 30, "sourceCidr": "192.168.20.0/24", "behavior": "passthrough", "comment": "servers VLAN" }
 ]
 ```
@@ -181,7 +178,7 @@ What the answers look like. Details in [DNS answers](08-dns-answers.md).
 
 ## Complete example
 
-A complete configuration with two cache servers, one of them used as failover:
+A complete configuration with two cache servers, the second one used as failover:
 
 ```jsonc
 {
@@ -203,9 +200,8 @@ A complete configuration with two cache servers, one of them used as failover:
   ],
 
   "routes": [
-    { "priority": 10, "sourceCidr": "127.0.0.1/32" , "server": "monolith-1" },
-    { "priority": 20, "sourceCidr": "192.168.17.0/24", "server": "monolith-1",
-      "failover": { "action": "failover", "server": "monolith-2" } }
+    { "priority": 10, "sourceCidr": "127.0.0.1/32" , "servers": ["monolith-1"] },
+    { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1", "monolith-2"] }
   ],
 
   "dns": { "ttl": 60 },
@@ -222,7 +218,7 @@ A complete configuration with two cache servers, one of them used as failover:
 | `…: duplicate server name` | names are compared ignoring case |
 | `…effective timeoutSeconds (n) must not exceed intervalSeconds (m)` | check the values you set **and** the defaults they combine with |
 | `routes[priority=n]: priority is used more than once` | priorities must be unique |
-| `…: behavior cacheIfHealthy requires a server` | missing `server` |
-| `…: server 'x' does not exist` | name mismatch (case does not matter) |
-| `…failover: failover server must differ from the primary server` | |
+| `…: behavior cacheIfHealthy requires at least one server` | missing or empty `servers` |
+| `…servers: server 'x' does not exist` | name mismatch (case does not matter) |
+| `…servers: server 'x' is listed more than once` | a name appears twice in one `servers` list |
 | `invalid JSON: …` | syntax error, an unknown property (`… could not be mapped to any .NET member …`), a wrong value type, or an unknown enum value (`… could not be converted …`); the message names the property path and line |

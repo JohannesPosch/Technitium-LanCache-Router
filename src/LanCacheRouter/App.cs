@@ -151,7 +151,7 @@ public sealed class App : IDnsApplication, IDnsRequestBlockingHandler, IDnsAppli
 			Log($"verbose: cache server '{server.Name}' {server.Address} enabled={server.Enabled}, health check {config.ResolveHealthCheck(server)}");
 
 		foreach (RouteConfig route in config.Routes.OrderBy(r => r.Priority))
-			Log($"verbose: route priority {route.Priority} {route.SourceCidr} enabled={route.Enabled} {route.Behavior} server={route.Server ?? "-"} failover={route.Failover.Action}/{route.Failover.Server ?? "-"}");
+			Log($"verbose: route priority {route.Priority} {route.SourceCidr} enabled={route.Enabled} {route.Behavior} servers=[{string.Join(", ", route.Servers)}]");
 	}
 
 	/// <summary>

@@ -62,7 +62,7 @@ including the saved domain-list snapshot.
   ],
 
   "routes": [
-    { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "lancache" }
+    { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["lancache"] }
   ]
 }
 ```

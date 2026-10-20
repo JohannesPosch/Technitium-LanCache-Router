@@ -6,7 +6,7 @@ namespace LanCacheRouter.Tests.Config;
 public class ConfigRobustnessTests
 {
     private const string Server = """{ "name": "a", "address": "192.168.1.1" }""";
-    private const string Route = """{ "priority": 1, "sourceCidr": "192.168.1.0/24", "server": "a" }""";
+    private const string Route = """{ "priority": 1, "sourceCidr": "192.168.1.0/24", "servers": ["a"] }""";
 
     public static TheoryData<string> HostileConfigs() => new()
     {
@@ -19,9 +19,9 @@ public class ConfigRobustnessTests
         """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1", "healthCheck": { "expectedStatus": null, "type": null } } ] }""",
         """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1", "healthCheck": { "expectedStatus": [ null ] } } ] }""",
         """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1", "healthCheck": { "startupProbe": null } } ] }""",
-        """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1" } ], "routes": [ { "priority": 1, "sourceCidr": null, "server": "a" } ] }""",
-        """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1" } ], "routes": [ { "priority": 1, "sourceCidr": "10.0.0.0/8", "failover": null } ] }""",
-        """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1" } ], "routes": [ { "priority": 1, "sourceCidr": "10.0.0.0/8", "server": "a", "failover": { "action": "failover", "server": null } } ] }""",
+        """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1" } ], "routes": [ { "priority": 1, "sourceCidr": null, "servers": ["a"] } ] }""",
+        """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1" } ], "routes": [ { "priority": 1, "sourceCidr": "10.0.0.0/8", "servers": null } ] }""",
+        """{ "cacheServers": [ { "name": "a", "address": "192.168.1.1" } ], "routes": [ { "priority": 1, "sourceCidr": "10.0.0.0/8", "servers": ["a", null] } ] }""",
         """{ "domainList": null }""",
         """{ "domainList": { "baseUrl": null } }""",
         """{ "domainList": { "refreshCron": null } }""",

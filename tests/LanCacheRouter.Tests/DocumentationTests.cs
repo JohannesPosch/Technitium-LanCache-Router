@@ -104,7 +104,7 @@ public partial class DocumentationTests
 
         if (config.Contains("\"routes\"") && !config.Contains("\"cacheServers\""))
         {
-            string[] names = [.. ServerReference().Matches(config).Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase)];
+            string[] names = [.. ServerList().Matches(config).SelectMany(m => QuotedName().Matches(m.Groups[1].Value)).Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase)];
             string servers = string.Join(", ", names.Select((name, i) => $"{{ \"name\": \"{name}\", \"address\": \"10.99.0.{i + 1}\" }}"));
             config = config.Insert(config.IndexOf('{') + 1, $" \"cacheServers\": [ {servers} ],");
         }
@@ -112,8 +112,11 @@ public partial class DocumentationTests
         return config;
     }
 
-    [GeneratedRegex("\"server\"\\s*:\\s*\"([^\"]+)\"")]
-    private static partial Regex ServerReference();
+    [GeneratedRegex("\"servers\"\\s*:\\s*\\[([^\\]]*)\\]")]
+    private static partial Regex ServerList();
+
+    [GeneratedRegex("\"([^\"]+)\"")]
+    private static partial Regex QuotedName();
 
     [DocumentationTheory]
     [MemberData(nameof(JsonBlocks))]

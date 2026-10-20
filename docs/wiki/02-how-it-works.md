@@ -38,13 +38,9 @@ flowchart TD
     TY -- no --> P
     TY -- yes --> RT{"First matching route<br/>(by priority)"}
     RT -- "none, or behavior passthrough" --> P
-    RT -- "cacheIfHealthy" --> H1{"Primary server<br/>Healthy?"}
-    H1 -- yes --> DM
-    H1 -- no --> F{"Failover<br/>configured?"}
-    F -- "passthrough" --> P
-    F -- "failover to server X" --> H2{"X Healthy?"}
-    H2 -- no --> P
-    H2 -- yes --> DM
+    RT -- "cacheIfHealthy" --> H1{"First Healthy server<br/>in the route's list?"}
+    H1 -- none --> P
+    H1 -- found --> DM
     DM{"Name in the<br/>domain list?"} -- no --> P
     DM -- yes --> TYPE{"Query type"}
     TYPE -- "A" --> ANS["Answer: A record with the<br/>server's address"]
@@ -58,8 +54,8 @@ In words:
    (MX, TXT, NS, PTR, …) is left to Technitium.
 3. **Route.** The client address is matched against the routing table, lowest priority number first; the first
    matching row wins. No match, or a row with behavior `passthrough`, means passthrough.
-4. **Server.** A `cacheIfHealthy` row uses its server if that server is **Healthy**. If not, its failover rule applies.
-   If no usable server results, the query is passed through.
+4. **Server.** A `cacheIfHealthy` row walks its `servers` list in order and uses the first server that is **Healthy**.
+   If none is Healthy, the query is passed through.
 5. **Domain.** The query name is looked up in the domain list. Not a cache domain → passthrough.
 6. **Answer.** The app builds the response (see [DNS answers](08-dns-answers.md)).
 

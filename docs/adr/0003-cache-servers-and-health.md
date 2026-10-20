@@ -11,7 +11,7 @@ multiple cache servers, one IP address per server (decided), per-server enable f
 CacheServer { name, enabled, address (one IPv4), healthCheck }
 ```
 Health is tracked per server, which is the health of its single address. More capacity or redundancy is
-expressed with more servers and the route failover (ADR 0004), not with multiple IPs per server.
+expressed with more servers in a route's ordered `servers` list (ADR 0004), not with multiple IPs per server.
 
 ## States
 | State     | Meaning                                         | Returned in DNS? |
@@ -33,7 +33,7 @@ A disabled server has no probe loop and is reported as Disabled. A changed addre
 health check also restarts the server as Unknown.
 
 DNS answers contain the server's address only while the server is Healthy. In every other state the server
-counts as not usable (→ failover, ADR 0004).
+counts as not usable (→ next server in the route's list, ADR 0004).
 
 ## Probes (replaces check-lancache.sh)
 Same knobs as the script, per server (defaults in `healthCheckDefaults`, overridable per server):

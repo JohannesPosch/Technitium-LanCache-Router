@@ -78,8 +78,8 @@ public sealed class QueryHandler
 
 			if (response is not null && state.LogQueries)
 			{
-				_log($"Answered {remoteEP.Address} {question.Type} {question.Name} [{service}] -> {decision.Server!.Name} ({decision.Server.Address})"
-					+ (decision.FailedOver ? " (failover)" : "")
+				_log($"Answered {remoteEP.Address} {question.Type} {question.Name} [{service}] -> {decision.Server!.Name} ({decision.Server.Address}) [{decision.Position}/{decision.Route!.Servers.Count}]"
+					+ (decision.FailedOver ? $" (failover, preferred: {string.Join(", ", decision.Route.Servers.Take(decision.Position - 1))} not Healthy)" : "")
 					+ (response.Answer.Count == 0 ? " (no data)" : ""));
 			}
 			else if (response is null)
@@ -118,7 +118,7 @@ public sealed class QueryHandler
 		string route = $"route {decision.Route.SourceCidr} (priority {decision.Route.Priority})";
 		return decision.Route.Behavior == RouteBehavior.Passthrough
 			? $"{route} is a passthrough route"
-			: $"{route}: server '{decision.Route.Server}' is not Healthy and no usable failover";
+			: $"{route}: none of the servers ({string.Join(", ", decision.Route.Servers)}) is Healthy";
 	}
 
 	/// <summary>

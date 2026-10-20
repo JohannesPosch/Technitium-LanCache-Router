@@ -8,7 +8,7 @@ server – **per client network**, with health checks, failover and a cron-sched
 {
   "enabled": true,
   "cacheServers": [ { "name": "lancache", "address": "192.168.17.44", "healthCheck": { "type": "tcp", "port": 80 } } ],
-  "routes":       [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "lancache" } ]
+  "routes":       [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["lancache"] } ]
 }
 ```
 
@@ -35,7 +35,7 @@ dotnet publish src/LanCacheRouter -c Release -o out
 |---|---|
 | `src/LanCacheRouter/App.cs` | the Technitium app (entry point) |
 | `src/LanCacheRouter/Config/` | configuration model, parser, validator |
-| `src/LanCacheRouter/Routing/` | CIDR routing table and failover decision |
+| `src/LanCacheRouter/Routing/` | CIDR routing table and server selection / failover |
 | `src/LanCacheRouter/Health/` | health states, probes, background monitor |
 | `src/LanCacheRouter/DomainList/` | list download, parsing, matcher, snapshot, cron refresh |
 | `src/LanCacheRouter/Dns/` | per-query pipeline and DNS answer building |

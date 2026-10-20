@@ -51,10 +51,9 @@ save; unchanged cache servers keep their health state.
   ],
 
   "routes": [
-    { "priority": 10, "sourceCidr": "127.0.0.1/32",    "server": "monolith-1", "behavior": "cacheIfHealthy",
-      "failover": { "action": "passthrough" }, "comment": "local tests" },
-    { "priority": 20, "sourceCidr": "192.168.17.0/24", "server": "monolith-1", "behavior": "cacheIfHealthy",
-      "failover": { "action": "failover", "server": "monolith-2" } }
+    { "priority": 10, "sourceCidr": "127.0.0.1/32",    "servers": ["monolith-1"], "behavior": "cacheIfHealthy",
+      "comment": "local tests" },
+    { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1", "monolith-2"], "behavior": "cacheIfHealthy" }
     // implicit: { priority: MAX, 0.0.0.0/0 + ::/0, behavior: passthrough }
   ],
 
@@ -64,7 +63,7 @@ save; unchanged cache servers keep their health state.
 ```
 
 ## Field notes
-- `behavior`: `passthrough` | `cacheIfHealthy`. `failover.action`: `passthrough` | `failover` (needs `server`).
+- `behavior`: `passthrough` | `cacheIfHealthy`. `servers` is an ordered preference list (first usable server wins, ADR 0004); if none is usable the query passes through.
 - Durations are integers in seconds; thresholds are consecutive counts.
 - All values have defaults, so a minimal config is just `cacheServers` + `routes`.
 - Time zone: there is no setting; the cron expression uses the time zone of the Technitium process (`TZ`).

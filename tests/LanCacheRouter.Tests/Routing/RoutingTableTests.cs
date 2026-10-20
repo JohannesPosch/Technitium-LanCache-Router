@@ -17,7 +17,10 @@ public class RoutingTableTests
             {
               "cacheServers": [
                 { "name": "primary",   "address": "192.168.17.44" },
-                { "name": "secondary", "address": "192.168.18.44" }
+                { "name": "secondary", "address": "192.168.18.44" },
+                { "name": "a", "address": "10.0.0.1" },
+                { "name": "b", "address": "10.0.0.2" },
+                { "name": "c", "address": "10.0.0.3" }
               ],
               "routes": [ {{routes}} ]
             }
@@ -33,11 +36,10 @@ public class RoutingTableTests
         new ServerHealth("secondary", secondary, IPAddress.Parse("192.168.18.44"))
     ]);
 
-    private const string Row17 = """{ "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary" }""";
+    private const string Row17 = """{ "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary"] }""";
 
     private const string Row17WithFailover = """
-        { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary",
-          "failover": { "action": "failover", "server": "secondary" } }
+        { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary", "secondary"] }
         """;
 
     [Fact]
@@ -72,7 +74,7 @@ public class RoutingTableTests
     [InlineData(HealthState.Unknown)]
     [InlineData(HealthState.Unhealthy)]
     [InlineData(HealthState.Disabled)]
-    public void UnusablePrimary_WithPassthroughFailover_IsPassedThrough(HealthState state)
+    public void UnusablePrimary_WithoutFurtherServers_IsPassedThrough(HealthState state)
     {
         RoutingDecision decision = Table(Row17).Resolve(Client17, Health(state));
 
@@ -113,9 +115,9 @@ public class RoutingTableTests
     }
 
     [Fact]
-    public void Failover_IsOneHopOnly_ASecondFailoverIsNeverFollowed()
+    public void OtherRoutes_AreNeverConsulted_WhenTheListIsExhausted()
     {
-        // a -> failover b, and b's own route would fail over to c. For a client of a's route, c must never be used.
+        // The list of a's route is [a, b]; b's own route lists c. For a client of a's route, c must never be used.
         ConfigParseResult result = ConfigParser.Parse("""
             {
               "cacheServers": [
@@ -124,8 +126,8 @@ public class RoutingTableTests
                 { "name": "c", "address": "10.0.0.3" }
               ],
               "routes": [
-                { "priority": 1, "sourceCidr": "192.168.17.0/24", "server": "a", "failover": { "action": "failover", "server": "b" } },
-                { "priority": 2, "sourceCidr": "192.168.18.0/24", "server": "b", "failover": { "action": "failover", "server": "c" } }
+                { "priority": 1, "sourceCidr": "192.168.17.0/24", "servers": ["a", "b"] },
+                { "priority": 2, "sourceCidr": "192.168.18.0/24", "servers": ["b", "c"] }
               ]
             }
             """);
@@ -139,7 +141,7 @@ public class RoutingTableTests
         ]);
 
         Assert.Equal(RoutingOutcome.Passthrough, table.Resolve(Client17, health).Outcome);
-        Assert.Equal("c", table.Resolve(Client18, health).Server!.Name); // c is only reachable through b's own route
+        Assert.Equal("c", table.Resolve(Client18, health).Server!.Name); // c is only listed on b's own route
     }
 
     [Fact]
@@ -156,8 +158,8 @@ public class RoutingTableTests
     public void FirstMatchByPriorityWins_EvenIfALaterRowIsMoreSpecific()
     {
         RoutingTable table = Table("""
-            { "priority": 20, "sourceCidr": "192.168.17.0/24", "server": "secondary" },
-            { "priority": 10, "sourceCidr": "192.168.0.0/16",  "server": "primary" }
+            { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["secondary"] },
+            { "priority": 10, "sourceCidr": "192.168.0.0/16",  "servers": ["primary"] }
             """);
 
         RoutingDecision decision = table.Resolve(Client17, Health(HealthState.Healthy));
@@ -169,8 +171,8 @@ public class RoutingTableTests
     public void SpecificRowBeforeWideRow_RoutesEachClientToItsOwnServer()
     {
         RoutingTable table = Table("""
-            { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary" },
-            { "priority": 20, "sourceCidr": "192.168.0.0/16",  "server": "secondary" }
+            { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary"] },
+            { "priority": 20, "sourceCidr": "192.168.0.0/16",  "servers": ["secondary"] }
             """);
         HealthSnapshot health = Health(HealthState.Healthy);
 
@@ -182,8 +184,8 @@ public class RoutingTableTests
     public void DisabledRoute_IsSkipped()
     {
         RoutingTable table = Table("""
-            { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary", "enabled": false },
-            { "priority": 20, "sourceCidr": "192.168.0.0/16",  "server": "secondary" }
+            { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary"], "enabled": false },
+            { "priority": 20, "sourceCidr": "192.168.0.0/16",  "servers": ["secondary"] }
             """);
 
         Assert.Equal("secondary", table.Resolve(Client17, Health(HealthState.Healthy)).Server!.Name);
@@ -218,7 +220,7 @@ public class RoutingTableTests
     [Fact]
     public void HostRoute_MatchesOnlyThatAddress()
     {
-        RoutingTable table = Table("""{ "priority": 1, "sourceCidr": "127.0.0.1/32", "server": "primary" }""");
+        RoutingTable table = Table("""{ "priority": 1, "sourceCidr": "127.0.0.1/32", "servers": ["primary"] }""");
         HealthSnapshot health = Health(HealthState.Healthy);
 
         Assert.Equal(RoutingOutcome.Cache, table.Resolve(IPAddress.Loopback, health).Outcome);
@@ -236,7 +238,7 @@ public class RoutingTableTests
     [Fact]
     public void Ipv6Route_MatchesIpv6ClientOnly()
     {
-        RoutingTable table = Table("""{ "priority": 1, "sourceCidr": "fd00:17::/64", "server": "primary" }""");
+        RoutingTable table = Table("""{ "priority": 1, "sourceCidr": "fd00:17::/64", "servers": ["primary"] }""");
         HealthSnapshot health = Health(HealthState.Healthy);
 
         Assert.Equal(RoutingOutcome.Cache, table.Resolve(IPAddress.Parse("fd00:17::5"), health).Outcome);
@@ -246,7 +248,7 @@ public class RoutingTableTests
     [Fact]
     public void Create_RejectsUnvalidatedConfigWithBadCidr()
     {
-        RouterConfig config = new() { Routes = [new RouteConfig { Priority = 1, SourceCidr = "nonsense", Server = "primary" }] };
+        RouterConfig config = new() { Routes = [new RouteConfig { Priority = 1, SourceCidr = "nonsense", Servers = ["primary"] }] };
 
         Assert.Throws<ArgumentException>(() => RoutingTable.Create(config));
     }
@@ -267,25 +269,67 @@ public class RoutingTableTests
         }
     }
 
-    [Fact]
-    public void FailoverServer_IsIgnored_WhenTheActionIsPassthrough_EvenIfOneIsNamed()
-    {
-        // Accepted with a warning by the validator, so the table must not act on it.
-        RoutingTable table = Table("""
-            { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary", "failover": { "action": "passthrough", "server": "secondary" } }
-            """);
+    private const string Row17WithThreeServers = """
+        { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["a", "b", "c"] }
+        """;
 
-        RoutingDecision decision = table.Resolve(Client17, Health(HealthState.Unhealthy, HealthState.Healthy));
+    private static HealthSnapshot Health3(HealthState a, HealthState b, HealthState c) => new(
+    [
+        new ServerHealth("a", a, IPAddress.Parse("10.0.0.1")),
+        new ServerHealth("b", b, IPAddress.Parse("10.0.0.2")),
+        new ServerHealth("c", c, IPAddress.Parse("10.0.0.3"))
+    ]);
+
+    [Theory]
+    [InlineData(HealthState.Healthy, HealthState.Healthy, HealthState.Healthy, "a", 1)]
+    [InlineData(HealthState.Healthy, HealthState.Unhealthy, HealthState.Unhealthy, "a", 1)]
+    [InlineData(HealthState.Unhealthy, HealthState.Healthy, HealthState.Healthy, "b", 2)]
+    [InlineData(HealthState.Unhealthy, HealthState.Unknown, HealthState.Healthy, "c", 3)]
+    [InlineData(HealthState.Disabled, HealthState.Unhealthy, HealthState.Healthy, "c", 3)]
+    public void ThreeServers_FirstHealthyInListOrderWins(HealthState a, HealthState b, HealthState c, string expected, int position)
+    {
+        RoutingDecision decision = Table(Row17WithThreeServers).Resolve(Client17, Health3(a, b, c));
+
+        Assert.Equal(RoutingOutcome.Cache, decision.Outcome);
+        Assert.Equal(expected, decision.Server!.Name);
+        Assert.Equal(position, decision.Position);
+        Assert.Equal(position > 1, decision.FailedOver);
+    }
+
+    [Fact]
+    public void ThreeServers_AllUnusable_IsPassedThrough()
+    {
+        RoutingDecision decision = Table(Row17WithThreeServers).Resolve(Client17, Health3(HealthState.Unhealthy, HealthState.Unknown, HealthState.Disabled));
 
         Assert.Equal(RoutingOutcome.Passthrough, decision.Outcome);
+        Assert.Equal(0, decision.Position);
+    }
+
+    [Fact]
+    public void RecoveredPreferredServer_TakesTrafficBackAtOnce()
+    {
+        RoutingTable table = Table(Row17WithThreeServers);
+
+        Assert.Equal("c", table.Resolve(Client17, Health3(HealthState.Unhealthy, HealthState.Unhealthy, HealthState.Healthy)).Server!.Name);
+        Assert.Equal("a", table.Resolve(Client17, Health3(HealthState.Healthy, HealthState.Unhealthy, HealthState.Healthy)).Server!.Name);
+    }
+
+    [Fact]
+    public void UnknownServerNames_AreSkipped()
+    {
+        // Rejected by the validator, so the table is built directly; it must still not choose a server it cannot find.
+        RouterConfig config = new() { Routes = [new RouteConfig { Priority = 10, SourceCidr = "192.168.17.0/24", Servers = ["ghost", "secondary"] }] };
+        RoutingTable table = RoutingTable.Create(config);
+
+        Assert.Equal("secondary", table.Resolve(Client17, Health(HealthState.Healthy)).Server!.Name);
     }
 
     [Fact]
     public void Priorities_AreOrderedNumerically_IncludingNegativeAndExtremeValues()
     {
         RoutingTable table = Table("""
-            { "priority": 2147483647, "sourceCidr": "0.0.0.0/0", "server": "secondary" },
-            { "priority": -2147483648, "sourceCidr": "192.168.17.0/24", "server": "primary" },
+            { "priority": 2147483647, "sourceCidr": "0.0.0.0/0", "servers": ["secondary"] },
+            { "priority": -2147483648, "sourceCidr": "192.168.17.0/24", "servers": ["primary"] },
             { "priority": 0, "sourceCidr": "192.168.0.0/16", "behavior": "passthrough" }
             """);
         HealthSnapshot health = Health(HealthState.Healthy);
@@ -300,8 +344,8 @@ public class RoutingTableTests
     {
         string[] rows =
         [
-            """{ "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary" }""",
-            """{ "priority": 20, "sourceCidr": "192.168.17.0/24", "server": "secondary" }""",
+            """{ "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary"] }""",
+            """{ "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["secondary"] }""",
             """{ "priority": 30, "sourceCidr": "0.0.0.0/0", "behavior": "passthrough" }""",
         ];
         HealthSnapshot health = Health(HealthState.Healthy);
@@ -311,11 +355,11 @@ public class RoutingTableTests
     }
 
     [Fact]
-    public void AServer_CanBeThePrimaryOfOneRoute_AndTheFailoverOfAnother()
+    public void AServer_CanBeFirstOnOneRoute_AndLaterOnAnother()
     {
         RoutingTable table = Table("""
-            { "priority": 1, "sourceCidr": "192.168.17.0/24", "server": "primary", "failover": { "action": "failover", "server": "secondary" } },
-            { "priority": 2, "sourceCidr": "192.168.18.0/24", "server": "secondary", "failover": { "action": "failover", "server": "primary" } }
+            { "priority": 1, "sourceCidr": "192.168.17.0/24", "servers": ["primary", "secondary"] },
+            { "priority": 2, "sourceCidr": "192.168.18.0/24", "servers": ["secondary", "primary"] }
             """);
 
         Assert.Equal("secondary", table.Resolve(Client17, Health(HealthState.Unhealthy)).Server!.Name);
@@ -324,10 +368,10 @@ public class RoutingTableTests
     }
 
     [Fact]
-    public void FailoverServerNames_AreMatchedIgnoringCase()
+    public void ServerNamesInTheList_AreMatchedIgnoringCase()
     {
         RoutingTable table = Table("""
-            { "priority": 1, "sourceCidr": "192.168.17.0/24", "server": "PRIMARY", "failover": { "action": "failover", "server": "SeCoNdArY" } }
+            { "priority": 1, "sourceCidr": "192.168.17.0/24", "servers": ["PRIMARY", "SeCoNdArY"] }
             """);
 
         Assert.Equal("secondary", table.Resolve(Client17, Health(HealthState.Unhealthy)).Server!.Name);
@@ -337,8 +381,8 @@ public class RoutingTableTests
     public void Ipv6Loopback_And_UnspecifiedAddresses_AreHandledWithoutErrors()
     {
         RoutingTable table = Table("""
-            { "priority": 1, "sourceCidr": "::1/128", "server": "primary" },
-            { "priority": 2, "sourceCidr": "127.0.0.1/32", "server": "secondary" }
+            { "priority": 1, "sourceCidr": "::1/128", "servers": ["primary"] },
+            { "priority": 2, "sourceCidr": "127.0.0.1/32", "servers": ["secondary"] }
             """);
         HealthSnapshot health = Health(HealthState.Healthy);
 
@@ -352,8 +396,8 @@ public class RoutingTableTests
     [Fact]
     public void ALargeTable_StillPicksTheFirstMatch()
     {
-        string rows = string.Join(",", Enumerable.Range(0, 3000).Select(i => $$"""{ "priority": {{i}}, "sourceCidr": "10.{{i / 250}}.{{i % 250}}.0/24", "server": "primary" }"""))
-            + """, { "priority": 5000, "sourceCidr": "0.0.0.0/0", "server": "secondary" }""";
+        string rows = string.Join(",", Enumerable.Range(0, 3000).Select(i => $$"""{ "priority": {{i}}, "sourceCidr": "10.{{i / 250}}.{{i % 250}}.0/24", "servers": ["primary"] }"""))
+            + """, { "priority": 5000, "sourceCidr": "0.0.0.0/0", "servers": ["secondary"] }""";
         RoutingTable table = Table(rows);
         HealthSnapshot health = Health(HealthState.Healthy);
 
@@ -385,9 +429,9 @@ public class RoutingTableTests
     }
 
     [Fact]
-    public void CacheRouteWithoutAServer_IsPassedThrough_EvenWhenItWasNeverValidated()
+    public void CacheRouteWithoutServers_IsPassedThrough_EvenWhenItWasNeverValidated()
     {
-        RouterConfig config = new() { Routes = [new RouteConfig { Priority = 1, SourceCidr = "192.168.17.0/24", Behavior = RouteBehavior.CacheIfHealthy, Server = null }] };
+        RouterConfig config = new() { Routes = [new RouteConfig { Priority = 1, SourceCidr = "192.168.17.0/24", Behavior = RouteBehavior.CacheIfHealthy, Servers = [] }] };
 
         RoutingDecision decision = RoutingTable.Create(config).Resolve(Client17, Health(HealthState.Healthy));
 

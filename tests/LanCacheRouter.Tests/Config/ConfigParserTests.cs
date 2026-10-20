@@ -35,10 +35,9 @@ public class ConfigParserTests
             { "name": "monolith-2", "enabled": false, "address": "192.168.18.44" }
           ],
           "routes": [
-            { "priority": 10, "sourceCidr": "127.0.0.1/32", "server": "monolith-1", "behavior": "cacheIfHealthy",
-              "failover": { "action": "passthrough" }, "comment": "local tests" },
-            { "priority": 20, "sourceCidr": "192.168.17.0/24", "server": "monolith-1", "behavior": "cacheIfHealthy",
-              "failover": { "action": "failover", "server": "monolith-2" } },
+            { "priority": 10, "sourceCidr": "127.0.0.1/32", "servers": ["monolith-1"], "behavior": "cacheIfHealthy",
+              "comment": "local tests" },
+            { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1", "monolith-2"], "behavior": "cacheIfHealthy" },
           ],
           "dns": { "ttl": 60, "aaaaMode": "nodata", "httpsMode": "nodata" },
           "logging": { "queries": false }
@@ -48,7 +47,7 @@ public class ConfigParserTests
     private const string Minimal = """
         {
           "cacheServers": [ { "name": "a", "address": "10.0.0.1" }, { "name": "b", "address": "10.0.0.2" } ],
-          "routes": [ { "priority": 1, "sourceCidr": "10.1.0.0/16", "server": "a" } ]
+          "routes": [ { "priority": 1, "sourceCidr": "10.1.0.0/16", "servers": ["a"] } ]
         }
         """;
 
@@ -68,7 +67,7 @@ public class ConfigParserTests
         Assert.True(result.IsValid, string.Join("; ", result.Errors));
         Assert.Empty(result.Warnings);
         Assert.Equal(2, result.Config!.CacheServers.Count);
-        Assert.Equal(FailoverAction.Failover, result.Config.Routes[1].Failover.Action);
+        Assert.Equal(["monolith-1", "monolith-2"], result.Config.Routes[1].Servers);
     }
 
     [Fact]
@@ -166,12 +165,13 @@ public class ConfigParserTests
     }
 
     [Theory]
-    [InlineData("\"server\": \"a\" }", "\"server\": \"nope\" }", "does not exist")]
+    [InlineData("\"servers\": [\"a\"] }", "\"servers\": [\"nope\"] }", "does not exist")]
     [InlineData("\"sourceCidr\": \"10.1.0.0/16\"", "\"sourceCidr\": \"10.1.0.0/40\"", "not a valid CIDR")]
-    [InlineData("\"server\": \"a\" }", "\"server\": \"a\", \"failover\": { \"action\": \"failover\" } }", "requires a server")]
-    [InlineData("\"server\": \"a\" }", "\"server\": \"a\", \"failover\": { \"action\": \"failover\", \"server\": \"a\" } }", "must differ")]
-    [InlineData("\"server\": \"a\" }", "\"server\": \"a\", \"failover\": { \"action\": \"failover\", \"server\": \"zzz\" } }", "does not exist")]
-    [InlineData("\"server\": \"a\" }", "\"behavior\": \"cacheIfHealthy\" }", "requires a server")]
+    [InlineData("\"servers\": [\"a\"] }", "\"servers\": [\"a\", \"zzz\"] }", "'zzz' does not exist")]
+    [InlineData("\"servers\": [\"a\"] }", "\"servers\": [\"a\", \"b\", \"A\"] }", "'A' is listed more than once")]
+    [InlineData("\"servers\": [\"a\"] }", "\"servers\": [\"a\", \"\"] }", "names must not be empty")]
+    [InlineData("\"servers\": [\"a\"] }", "\"servers\": [] }", "requires at least one server")]
+    [InlineData("\"servers\": [\"a\"] }", "\"behavior\": \"cacheIfHealthy\" }", "requires at least one server")]
     public void Route_Errors(string from, string to, string expectedError)
     {
         ConfigParseResult result = Parse(Replace(Minimal, from, to));
@@ -183,7 +183,7 @@ public class ConfigParserTests
     [Fact]
     public void DuplicatePriority_IsRejected()
     {
-        string json = Replace(Minimal, "\"routes\": [", "\"routes\": [ { \"priority\": 1, \"sourceCidr\": \"10.2.0.0/16\", \"server\": \"b\" },");
+        string json = Replace(Minimal, "\"routes\": [", "\"routes\": [ { \"priority\": 1, \"sourceCidr\": \"10.2.0.0/16\", \"servers\": [\"b\"] },");
         ConfigParseResult result = Parse(json);
 
         Assert.Contains(result.Errors, e => e.Contains("used more than once"));
@@ -192,7 +192,7 @@ public class ConfigParserTests
     [Fact]
     public void ShadowedRoute_ProducesWarningNotError()
     {
-        string json = Replace(Minimal, "\"routes\": [", "\"routes\": [ { \"priority\": 2, \"sourceCidr\": \"10.1.5.0/24\", \"server\": \"b\" },");
+        string json = Replace(Minimal, "\"routes\": [", "\"routes\": [ { \"priority\": 2, \"sourceCidr\": \"10.1.5.0/24\", \"servers\": [\"b\"] },");
         ConfigParseResult result = Parse(json);
 
         Assert.True(result.IsValid);
@@ -203,7 +203,7 @@ public class ConfigParserTests
     public void ShadowedByDisabledRoute_IsNotWarned()
     {
         string json = Replace(Minimal, "\"priority\": 1,", "\"priority\": 1, \"enabled\": false,")
-            .Replace("\"routes\": [", "\"routes\": [ { \"priority\": 2, \"sourceCidr\": \"10.1.5.0/24\", \"server\": \"b\" },");
+            .Replace("\"routes\": [", "\"routes\": [ { \"priority\": 2, \"sourceCidr\": \"10.1.5.0/24\", \"servers\": [\"b\"] },");
         ConfigParseResult result = Parse(json);
 
         Assert.True(result.IsValid);
@@ -213,7 +213,7 @@ public class ConfigParserTests
     [Fact]
     public void PassthroughRoute_NeedsNoServer()
     {
-        string json = Replace(Minimal, "\"server\": \"a\"", "\"behavior\": \"passthrough\"");
+        string json = Replace(Minimal, "\"servers\": [\"a\"]", "\"behavior\": \"passthrough\"");
 
         Assert.True(Parse(json).IsValid);
     }
@@ -351,19 +351,17 @@ public class ConfigParserTests
     [Fact]
     public void RouteWithPassthroughBehavior_AndAServer_OnlyWarns()
     {
-        ConfigParseResult result = Parse(Replace(Minimal, "\"server\": \"a\"", "\"behavior\": \"passthrough\", \"server\": \"a\""));
+        ConfigParseResult result = Parse(Replace(Minimal, "\"servers\": [\"a\"]", "\"behavior\": \"passthrough\", \"servers\": [\"a\"]"));
 
         Assert.True(result.IsValid);
-        Assert.Contains(result.Warnings, w => w == "routes[priority=1]: server is ignored because behavior is passthrough");
+        Assert.Contains(result.Warnings, w => w == "routes[priority=1]: servers are ignored because behavior is passthrough");
     }
 
     [Fact]
-    public void FailoverServer_WithPassthroughAction_OnlyWarns()
+    public void LegacyServerAndFailoverSettings_AreRejected()
     {
-        ConfigParseResult result = Parse(Replace(Minimal, "\"server\": \"a\"", "\"server\": \"a\", \"failover\": { \"action\": \"passthrough\", \"server\": \"b\" }"));
-
-        Assert.True(result.IsValid);
-        Assert.Contains(result.Warnings, w => w == "routes[priority=1].failover: server is ignored because action is passthrough");
+        Assert.False(Parse(Replace(Minimal, "\"servers\": [\"a\"]", "\"server\": \"a\"")).IsValid);
+        Assert.False(Parse(Replace(Minimal, "\"servers\": [\"a\"]", "\"servers\": [\"a\"], \"failover\": { \"action\": \"passthrough\" }")).IsValid);
     }
 
     [Fact]
@@ -379,7 +377,6 @@ public class ConfigParserTests
     [InlineData("\"behavior\": 1")]
     [InlineData("\"behavior\": \"\"")]
     [InlineData("\"behavior\": null")]
-    [InlineData("\"failover\": { \"action\": 0 }")]
     public void EnumValues_MustBeKnownStrings(string setting)
     {
         Assert.False(Parse(Replace(Minimal, "\"sourceCidr\"", setting + ", \"sourceCidr\"")).IsValid);
@@ -476,7 +473,7 @@ public class ConfigParserTests
     public void RoutesMayPointAtDisabledServers_TheyJustNeverServe()
     {
         string json = Replace(Replace(Minimal, "\"name\": \"a\"", "\"name\": \"a\", \"enabled\": false"),
-            "\"server\": \"a\" }", "\"server\": \"a\", \"failover\": { \"action\": \"failover\", \"server\": \"b\" } }");
+            "\"servers\": [\"a\"] }", "\"servers\": [\"a\", \"b\"] }");
 
         Assert.True(Parse(json).IsValid);
     }
@@ -505,7 +502,7 @@ public class ConfigParserTests
     public void BigConfiguration_IsValidatedQuickly()
     {
         string servers = string.Join(",", Enumerable.Range(0, 500).Select(i => $$"""{ "name": "s{{i}}", "address": "10.{{i / 250}}.{{i % 250}}.1" }"""));
-        string routes = string.Join(",", Enumerable.Range(0, 2000).Select(i => $$"""{ "priority": {{i}}, "sourceCidr": "10.{{i / 250}}.{{i % 250}}.0/24", "server": "s{{i % 500}}" }"""));
+        string routes = string.Join(",", Enumerable.Range(0, 2000).Select(i => $$"""{ "priority": {{i}}, "sourceCidr": "10.{{i / 250}}.{{i % 250}}.0/24", "servers": ["s{{i % 500}}"] }"""));
 
         System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
         ConfigParseResult result = Parse($$"""{ "cacheServers": [ {{servers}} ], "routes": [ {{routes}} ] }""");

@@ -5,7 +5,7 @@ using LanCacheRouter.Health;
 namespace LanCacheRouter.Routing;
 
 /// <summary>
-/// The compiled routing table (ADR 0004): maps a client address to a cache server, honoring behavior and failover.
+/// The compiled routing table (ADR 0004): maps a client address to a cache server, honoring behavior and the ordered server list.
 /// Immutable and thread-safe; build a new one when the configuration changes. The health of the servers is not part
 /// of the table, it is passed to <see cref="Resolve"/> so the request path always sees the latest snapshot.
 /// </summary>
@@ -52,8 +52,8 @@ public sealed class RoutingTable
     /// <list type="number">
     /// <item>The first enabled route (lowest priority number) whose network contains the client wins; no match means passthrough.</item>
     /// <item>A <see cref="RouteBehavior.Passthrough"/> route passes the query through.</item>
-    /// <item>A <see cref="RouteBehavior.CacheIfHealthy"/> route uses its server if that is Healthy.</item>
-    /// <item>Otherwise the failover applies: pass through, or use the failover server if that is Healthy. Failover is one hop only.</item>
+    /// <item>A <see cref="RouteBehavior.CacheIfHealthy"/> route uses the first Healthy server of its ordered list, so later entries act as failovers.</item>
+    /// <item>If no server of the list is Healthy the query is passed through.</item>
     /// </list>
     /// </summary>
     /// <param name="client">The client address; IPv4-mapped IPv6 addresses are treated as IPv4.</param>
@@ -67,17 +67,16 @@ public sealed class RoutingTable
                 continue;
 
             if (route.Behavior == RouteBehavior.Passthrough)
-                return new RoutingDecision(RoutingOutcome.Passthrough, null, route, false);
+                return new RoutingDecision(RoutingOutcome.Passthrough, null, route, 0);
 
-            ServerHealth? primary = UsableServer(health, route.Server);
-            if (primary is not null)
-                return new RoutingDecision(RoutingOutcome.Cache, primary, route, false);
+            for (int i = 0; i < route.Servers.Count; i++)
+            {
+                ServerHealth? server = UsableServer(health, route.Servers[i]);
+                if (server is not null)
+                    return new RoutingDecision(RoutingOutcome.Cache, server, route, i + 1);
+            }
 
-            ServerHealth? failover = route.Failover.Action == FailoverAction.Failover ? UsableServer(health, route.Failover.Server) : null;
-            if (failover is not null)
-                return new RoutingDecision(RoutingOutcome.Cache, failover, route, true);
-
-            return new RoutingDecision(RoutingOutcome.Passthrough, null, route, false);
+            return new RoutingDecision(RoutingOutcome.Passthrough, null, route, 0);
         }
 
         return RoutingDecision.DefaultPassthrough;

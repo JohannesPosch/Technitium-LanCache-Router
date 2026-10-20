@@ -24,7 +24,7 @@ Everything the app logs goes to Technitium's log (web UI → **Logs**, or the lo
 | `Domain list: unexpected error in the refresh loop, trying again in 5 min: …` | An internal error in the scheduler. The loop continues; please report it with the text. |
 | `Domain list: service 'x' in the service filter does not exist in the list` | Probably a typo in `include`/`exclude`. |
 | `Domain list: ignoring persisted snapshot from …` / `ignoring unreadable snapshot` | The snapshot belongs to another `baseUrl` or is damaged. |
-| `Answered 192.168.17.50 A cdn.steamcontent.com [steam] -> monolith-1 (192.168.17.44)` | Per-query line (`logging.queries: true`). `(failover)` and `(no data)` are appended when they apply. |
+| `Answered 192.168.17.50 A cdn.steamcontent.com [steam] -> monolith-1 (192.168.17.44)` | Per-query line (`logging.queries: true`). `[1/2]` is the position of the answering server in the route's list; `(failover, preferred: … not Healthy)` and `(no data)` are appended when they apply. |
 | `Error handling query, passing it through: …` | An unexpected exception. The query was resolved normally. Please report it with the text. |
 
 ## Why is this name not answered with the cache?
@@ -74,7 +74,7 @@ If a resolver caches answers, wait for the TTL (60 s) or use `dig` directly agai
 | **Technitium restarts** | Servers start Unknown, probed at once and every second until settled → in service within seconds. The domain list is read from the snapshot immediately. | Nothing. |
 | **GitHub is unreachable** | The last list stays active; refresh retried every 5 minutes. | Nothing, unless it lasts for weeks and the list grows stale. |
 | **You break the config** | The save is refused and the previous config keeps running. | Fix what the error message lists. |
-| **You want to take a cache out for maintenance** | Set its `enabled` to `false` (state Disabled). Routes with failover switch to the failover server; others pass through. | Re-enable afterwards; it starts as Unknown. |
+| **You want to take a cache out for maintenance** | Set its `enabled` to `false` (state Disabled). Routes switch to the next server in their list; routes without another Healthy server pass through. | Re-enable afterwards; it starts as Unknown. |
 | **Two Technitium nodes disagree** | Health is per node; a node that cannot reach the cache will pass through while the other still serves it. | Check network reachability from the failing node. |
 | **A new game is not cached** | Not in the upstream list yet. | Add its hosts under `extraDomains`, and send them upstream. |
 

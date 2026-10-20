@@ -5,8 +5,8 @@
 | Limitation | Why / consequence | Planned |
 |---|---|---|
 | **IPv4 caches only.** A server has one IPv4 address. | AAAA/HTTPS queries for cache domains are answered empty so clients stay on the cache. | [B1](../backlog.md) |
-| **One address per server.** | Use several servers and failover for redundancy. | – |
-| **One server per route at a time** (primary, plus one failover). No load balancing between servers. | Strict primary/failover is the decided model. | – |
+| **One address per server.** | Use several servers in a route's `servers` list for redundancy. | – |
+| **One server per route at a time** (the first Healthy one of an ordered list). No load balancing between servers. | Strict priority order is the decided model. | – |
 | **No per-service routing.** All services of a matched client go to the same server. | e.g. "Steam → cache A, Epic → cache B" is not possible yet. | [B2](../backlog.md) |
 | **State is visible in logs only.** | No status page or diagnostic DNS name. | [B3](../backlog.md) (diagnostic TXT query) |
 | **Health is checked from the DNS server.** | A path problem that only affects clients is invisible. | – |

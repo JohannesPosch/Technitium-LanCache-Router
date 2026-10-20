@@ -90,7 +90,7 @@ public static class ConfigValidator
                 errors.Add("routes must not contain null entries");
 
             foreach (RouteConfig route in routes.Where(r => r is not null))
-                Require(route.Failover, $"routes[priority={route.Priority}].failover");
+                Require(route.Servers, $"routes[priority={route.Priority}].servers");
         }
     }
 
@@ -211,7 +211,7 @@ public static class ConfigValidator
     }
 
     /// <summary>
-    /// Checks priorities, CIDRs, server references and failover settings of the routing table, and warns about
+    /// Checks priorities, CIDRs, server lists of the routing table, and warns about
     /// rows that an earlier enabled row makes unreachable.
     /// </summary>
     /// <param name="config">The configuration whose routes are checked.</param>
@@ -237,28 +237,23 @@ public static class ConfigValidator
 
             if (route.Behavior == RouteBehavior.CacheIfHealthy)
             {
-                if (string.IsNullOrWhiteSpace(route.Server))
-                    errors.Add($"{path}: behavior cacheIfHealthy requires a server");
-                else if (!serverNames.Contains(route.Server))
-                    errors.Add($"{path}: server '{route.Server}' does not exist");
+                if (route.Servers.Count == 0)
+                    errors.Add($"{path}: behavior cacheIfHealthy requires at least one server");
 
-                if (route.Failover.Action == FailoverAction.Failover)
+                HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+                foreach (string? server in route.Servers)
                 {
-                    if (string.IsNullOrWhiteSpace(route.Failover.Server))
-                        errors.Add($"{path}.failover: action failover requires a server");
-                    else if (!serverNames.Contains(route.Failover.Server))
-                        errors.Add($"{path}.failover: server '{route.Failover.Server}' does not exist");
-                    else if (string.Equals(route.Failover.Server, route.Server, StringComparison.OrdinalIgnoreCase))
-                        errors.Add($"{path}.failover: failover server must differ from the primary server");
-                }
-                else if (route.Failover.Server is not null)
-                {
-                    warnings.Add($"{path}.failover: server is ignored because action is passthrough");
+                    if (string.IsNullOrWhiteSpace(server))
+                        errors.Add($"{path}.servers: names must not be empty");
+                    else if (!serverNames.Contains(server))
+                        errors.Add($"{path}.servers: server '{server}' does not exist");
+                    else if (!seen.Add(server))
+                        errors.Add($"{path}.servers: server '{server}' is listed more than once");
                 }
             }
-            else if (route.Server is not null)
+            else if (route.Servers.Count > 0)
             {
-                warnings.Add($"{path}: server is ignored because behavior is passthrough");
+                warnings.Add($"{path}: servers are ignored because behavior is passthrough");
             }
         }
 

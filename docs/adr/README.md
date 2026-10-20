@@ -6,12 +6,12 @@ cache server (if any) to answer with, and (c) only answers with cache IPs that a
 
 | #    | Title                                             | Status   |
 |------|---------------------------------------------------|----------|
-| 0001 | Technitium extension point and overall design     | Proposed |
-| 0002 | Cache-domain list sourcing and cron refresh       | Proposed |
-| 0003 | Cache servers, addresses and health states        | Proposed |
-| 0004 | CIDR routing table, behavior and failover         | Proposed |
-| 0005 | DNS response semantics                            | Proposed |
-| 0006 | Configuration schema (`dnsApp.config`)            | Proposed |
+| 0001 | Technitium extension point and overall design     | Accepted |
+| 0002 | Cache-domain list sourcing and cron refresh       | Accepted |
+| 0003 | Cache servers, addresses and health states        | Accepted |
+| 0004 | CIDR routing table, behavior and failover         | Accepted |
+| 0005 | DNS response semantics                            | Accepted |
+| 0006 | Configuration schema (`dnsApp.config`)            | Accepted |
 
 Deferred features: see [../backlog.md](../backlog.md).
 

@@ -46,7 +46,7 @@ public sealed class AppTests : IDisposable
           "enabled": true,
           "domainList": { "baseUrl": "{{FakeDomainSource.BaseUrl}}" },
           "cacheServers": [ { "name": "cache-1", "address": "192.168.17.44", "healthCheck": { "type": "none", "successThreshold": 1 } } ],
-          "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "cache-1" } ]
+          "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["cache-1"] } ]
           {{extra}}
         }
         """;
@@ -137,7 +137,7 @@ public sealed class AppTests : IDisposable
         Assert.True(await WaitUntilAnswering());
 
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => _app.InitializeAsync(
-            _server, """{ "cacheServers": [ { "name": "x", "address": "nope" } ], "routes": [ { "priority": 1, "sourceCidr": "bad", "server": "x" } ] }"""));
+            _server, """{ "cacheServers": [ { "name": "x", "address": "nope" } ], "routes": [ { "priority": 1, "sourceCidr": "bad", "servers": ["x"] } ] }"""));
 
         Assert.Contains("not a valid IPv4 address", error.Message);
         Assert.Contains("not a valid CIDR", error.Message);
@@ -180,7 +180,7 @@ public sealed class AppTests : IDisposable
     public async Task ConfigWarnings_AreLogged()
     {
         string shadowed = Enabled().Replace("\"routes\": [", """
-            "routes": [ { "priority": 5, "sourceCidr": "192.168.0.0/16", "server": "cache-1" },
+            "routes": [ { "priority": 5, "sourceCidr": "192.168.0.0/16", "servers": ["cache-1"] },
             """);
 
         await _app.InitializeAsync(_server, shadowed);
@@ -225,7 +225,7 @@ public sealed class AppTests : IDisposable
             { "name": "primary",   "address": "127.0.0.1",    "healthCheck": { "type": "tcp", "port": {{primaryPort}}, "failThreshold": 1, "successThreshold": 1 } },
             { "name": "secondary", "address": "192.168.18.44", "healthCheck": { "type": "none", "successThreshold": 1 } }
           ],
-          "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary", "failover": { "action": "failover", "server": "secondary" } } ]
+          "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary", "secondary"] } ]
         }
         """;
 
@@ -275,7 +275,7 @@ public sealed class AppTests : IDisposable
             {
               "domainList": { "baseUrl": "{{FakeDomainSource.BaseUrl}}" },
               "cacheServers": [ { "name": "slow", "address": "192.0.2.1", "healthCheck": { "type": "tcp", "port": 9, "successThreshold": 1, "timeoutSeconds": 30, "intervalSeconds": 30, "startupProbe": { "enabled": false } } } ],
-              "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "slow" } ]
+              "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["slow"] } ]
             }
             """;
 
@@ -337,7 +337,7 @@ public sealed class AppTests : IDisposable
     [Fact]
     public async Task FirstConfigurationInvalid_IsRejected_AndTheAppStaysInactive()
     {
-        await Assert.ThrowsAsync<InvalidOperationException>(() => _app.InitializeAsync(_server, """{ "routes": [ { "priority": 1, "sourceCidr": "192.168.17.0/24", "server": "ghost" } ] }"""));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _app.InitializeAsync(_server, """{ "routes": [ { "priority": 1, "sourceCidr": "192.168.17.0/24", "servers": ["ghost"] } ] }"""));
 
         Assert.Null(await Ask());
         Assert.True(_server.LogContains("configuration rejected"));
@@ -401,7 +401,7 @@ public sealed class AppTests : IDisposable
                 {
                   "domainList": { "baseUrl": "{{FakeDomainSource.BaseUrl}}" },
                   "cacheServers": [ { "name": "local", "address": "127.0.0.1", "healthCheck": { "type": "tcp", "port": {{port}}, "intervalSeconds": 1, "timeoutSeconds": 1, "successThreshold": 1 } } ],
-                  "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "local" } ]
+                  "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["local"] } ]
                 }
                 """;
 
@@ -587,7 +587,7 @@ public sealed class AppTests : IDisposable
                 { "name": "primary",   "address": "192.168.17.44", "enabled": false, "healthCheck": { "type": "none" } },
                 { "name": "secondary", "address": "192.168.18.44", "healthCheck": { "type": "none" } }
               ],
-              "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary", "failover": { "action": "failover", "server": "secondary" } } ]
+              "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary", "secondary"] } ]
             }
             """;
 
@@ -604,7 +604,7 @@ public sealed class AppTests : IDisposable
             {
               "domainList": { "baseUrl": "{{FakeDomainSource.BaseUrl}}", "refreshOnStartup": false },
               "cacheServers": [ { "name": "static", "address": "192.168.17.44", "healthCheck": { "type": "none", "successThreshold": 50 } } ],
-              "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "static" } ]
+              "routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["static"] } ]
             }
             """;
         PlantSnapshot(_server, "*.steamcontent.com");
@@ -635,10 +635,10 @@ public sealed class AppTests : IDisposable
     [Fact]
     public async Task ConfigWarnings_AboutIgnoredSettings_AreLogged()
     {
-        string config = Enabled().Replace("\"server\": \"cache-1\" }", "\"server\": \"cache-1\", \"behavior\": \"passthrough\" }");
+        string config = Enabled().Replace("\"servers\": [\"cache-1\"] }", "\"servers\": [\"cache-1\"], \"behavior\": \"passthrough\" }");
 
         await _app.InitializeAsync(_server, config);
 
-        Assert.True(_server.LogContains("LanCache Router: warning: routes[priority=10]: server is ignored because behavior is passthrough"));
+        Assert.True(_server.LogContains("LanCache Router: warning: routes[priority=10]: servers are ignored because behavior is passthrough"));
     }
 }

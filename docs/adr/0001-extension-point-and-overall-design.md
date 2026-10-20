@@ -30,9 +30,9 @@ it sees every query with the real client address, before cache/recursion, and ca
 Flow per query:
 
 1. Type is A/AAAA(/HTTPS, see 0005) and class IN? Otherwise return null (continue normally).
-2. Route lookup by client IP (ADR 0004) → server/behavior. Passthrough → return null.
+2. Route lookup by client IP (ADR 0004) → server list/behavior. Passthrough → return null.
 3. Domain lookup in the in-memory index (ADR 0002). No match → return null.
-4. Resolve the address of the chosen server, if Healthy (ADR 0003), applying failover (ADR 0004).
+4. Pick the first Healthy server of the route's ordered list (ADR 0003/0004) and resolve its address.
 5. Build and return the synthesized response (ADR 0005); if nothing usable → return null (normal DNS).
 
 Components (all in one assembly, no external services):

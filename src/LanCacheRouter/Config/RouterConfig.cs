@@ -31,18 +31,6 @@ public enum RouteBehavior
 }
 
 /// <summary>
-/// What a route does when its primary cache server is not usable.
-/// </summary>
-public enum FailoverAction
-{
-    /// <summary>The query is resolved by Technitium as usual.</summary>
-    Passthrough,
-
-    /// <summary>The query is answered by a second, named cache server (one hop only).</summary>
-    Failover
-}
-
-/// <summary>
 /// How AAAA and HTTPS/SVCB queries for cache domains are handled.
 /// </summary>
 public enum NodataMode
@@ -387,23 +375,7 @@ public sealed class CacheServerConfig
 }
 
 /// <summary>
-/// What a route does when its primary server is not usable (ADR 0004).
-/// </summary>
-public sealed class FailoverConfig
-{
-    /// <summary>
-    /// Whether to pass the query through or use another server.
-    /// </summary>
-    public FailoverAction Action { get; init; } = FailoverAction.Passthrough;
-
-    /// <summary>
-    /// Name of the server to fail over to. Required for <see cref="FailoverAction.Failover"/> and must differ from the route's primary server.
-    /// </summary>
-    public string? Server { get; init; }
-}
-
-/// <summary>
-/// One row of the routing table: maps a client network to a cache server (ADR 0004).
+/// One row of the routing table: maps a client network to an ordered list of cache servers (ADR 0004).
 /// </summary>
 public sealed class RouteConfig
 {
@@ -418,19 +390,15 @@ public sealed class RouteConfig
     public string SourceCidr { get; init; } = string.Empty;
 
     /// <summary>
-    /// Name of the primary cache server. Required for <see cref="RouteBehavior.CacheIfHealthy"/>.
+    /// Names of the cache servers in order of preference: the first usable one answers, so later entries are
+    /// failovers. If none is usable the query is passed through. Required (at least one) for <see cref="RouteBehavior.CacheIfHealthy"/>.
     /// </summary>
-    public string? Server { get; init; }
+    public List<string> Servers { get; init; } = [];
 
     /// <summary>
     /// What to do with matching clients.
     /// </summary>
     public RouteBehavior Behavior { get; init; } = RouteBehavior.CacheIfHealthy;
-
-    /// <summary>
-    /// What to do when <see cref="Server"/> is not usable.
-    /// </summary>
-    public FailoverConfig Failover { get; init; } = new();
 
     /// <summary>
     /// Free-text note for humans; not used by the app.

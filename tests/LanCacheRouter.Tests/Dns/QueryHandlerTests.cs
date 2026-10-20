@@ -33,7 +33,7 @@ public class QueryHandlerTests
             _ => { });
 
     private static RouterConfig Config(string extra = "", string routes = """
-        { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary", "failover": { "action": "failover", "server": "secondary" } }
+        { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary", "secondary"] }
         """)
     {
         ConfigParseResult result = ConfigParser.Parse($$"""
@@ -214,8 +214,8 @@ public class QueryHandlerTests
 
         string[] lines = [.. _logs];
         Assert.Equal(2, lines.Length);
-        Assert.Equal("Answered 192.168.17.50 A cdn1.steamcontent.com [steam] -> primary (192.168.17.44)", lines[0]);
-        Assert.Equal("Answered 192.168.17.50 AAAA cdn1.steamcontent.com [steam] -> secondary (192.168.18.44) (failover) (no data)", lines[1]);
+        Assert.Equal("Answered 192.168.17.50 A cdn1.steamcontent.com [steam] -> primary (192.168.17.44) [1/2]", lines[0]);
+        Assert.Equal("Answered 192.168.17.50 AAAA cdn1.steamcontent.com [steam] -> secondary (192.168.18.44) [2/2] (failover, preferred: primary not Healthy) (no data)", lines[1]);
     }
 
     [Fact]
@@ -232,7 +232,7 @@ public class QueryHandlerTests
         Assert.Equal(3, lines.Length);
         Assert.Contains("client matches no route", lines[0]);
         Assert.Contains("not a cache domain", lines[1]);
-        Assert.Contains("not Healthy", lines[2]);
+        Assert.Contains("none of the servers (primary, secondary) is Healthy", lines[2]);
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public class QueryHandlerTests
     [Fact]
     public void Ipv6Client_OnAnIpv6Route_GetsTheIpv4CacheAddress_AndNodataForAaaa()
     {
-        QueryHandler handler = Handler(Config(routes: """{ "priority": 1, "sourceCidr": "fd00:17::/64", "server": "primary" }"""));
+        QueryHandler handler = Handler(Config(routes: """{ "priority": 1, "sourceCidr": "fd00:17::/64", "servers": ["primary"] }"""));
         IPEndPoint client = TestDns.Client("fd00:17::50");
 
         DnsDatagram a = handler.Handle(TestDns.Query("cdn1.steamcontent.com"), client)!;
@@ -400,8 +400,8 @@ public class QueryHandlerTests
     public void RoutedClientsOfDifferentRoutes_GetTheirOwnServers_InTheSameInstant()
     {
         QueryHandler handler = Handler(Config(routes: """
-            { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "primary" },
-            { "priority": 20, "sourceCidr": "192.168.18.0/24", "server": "secondary" }
+            { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["primary"] },
+            { "priority": 20, "sourceCidr": "192.168.18.0/24", "servers": ["secondary"] }
             """));
 
         Assert.Equal(Primary, AnswerAddress(handler.Handle(TestDns.Query("cdn1.steamcontent.com"), TestDns.Client("192.168.17.9"))!));

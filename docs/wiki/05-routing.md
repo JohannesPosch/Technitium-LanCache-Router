@@ -11,30 +11,28 @@ It looks only at the **client's source address** and at the **current health** o
 3. If no row matches, the query is **passed through**. (This is the implicit default row.)
 4. For the winning row:
 
-| `behavior` | Primary server Healthy | Primary server not Healthy |
-|---|---|---|
-| `passthrough` | passed through | passed through |
-| `cacheIfHealthy` | **answer with the primary's address** | apply `failover` ↓ |
-
-| `failover.action` | Result |
+| `behavior` | Result |
 |---|---|
 | `passthrough` | passed through |
-| `failover` (server X) | answer with X's address **if X is Healthy**, otherwise passed through |
+| `cacheIfHealthy` | **answer with the address of the first Healthy server in `servers`** (list order = order of preference); if none is Healthy, passed through |
 
-5. **Failover is exactly one hop.** X's own state is checked, but X's other routes or failover settings are never
-   consulted – there are no chains and no loops.
+5. **The list is the failover.** Put the preferred server first and the standbys after it, as many as you like. Only
+   the route's own list is consulted; other routes are never looked at, so there are no chains and no loops.
+6. **Failback is automatic.** Every query is evaluated from the top of the list, so as soon as a preferred server is
+   Healthy again (after its `successThreshold` passes, see [Health checks](06-health-checks.md)) it gets its traffic back.
 
 "Not Healthy" means the server is *Unknown*, *Unhealthy*, *Disabled*, or not defined.
 
-## Decision table: one route with failover
+## Decision table: one route with three servers
 
-Route: `priority 20, 192.168.17.0/24 → monolith-1, failover → monolith-2`
+Route: `priority 20, 192.168.17.0/24 → servers [cache-1, cache-2, cache-3]`
 
-| monolith-1 | monolith-2 | Client in 192.168.17.0/24 gets |
-|---|---|---|
-| Healthy | any | monolith-1 |
-| Unknown / Unhealthy / Disabled | Healthy | **monolith-2** (failover) |
-| Unknown / Unhealthy / Disabled | not Healthy | real CDN addresses (passthrough) |
+| cache-1 | cache-2 | cache-3 | Client in 192.168.17.0/24 gets |
+|---|---|---|---|
+| Healthy | any | any | cache-1 |
+| not Healthy | Healthy | any | **cache-2** (failover) |
+| not Healthy | not Healthy | Healthy | **cache-3** (failover) |
+| not Healthy | not Healthy | not Healthy | real CDN addresses (passthrough) |
 
 Clients outside `192.168.17.0/24` are unaffected by all of this.
 
@@ -46,8 +44,8 @@ ones:
 ```jsonc
 "routes": [
   { "priority": 10, "sourceCidr": "192.168.17.99/32", "behavior": "passthrough", "comment": "a PC that must not use the cache" },
-  { "priority": 20, "sourceCidr": "192.168.17.0/24", "server": "monolith-1" },
-  { "priority": 30, "sourceCidr": "192.168.0.0/16",  "server": "monolith-2" }
+  { "priority": 20, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1"] },
+  { "priority": 30, "sourceCidr": "192.168.0.0/16",  "servers": ["monolith-2"] }
 ]
 ```
 
@@ -59,26 +57,26 @@ first. The app tells you: *"`routes[priority=…]` … is never used: shadowed b
 ### One cache for one VLAN, everything else normal
 
 ```jsonc
-"routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "monolith-1" } ]
+"routes": [ { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["monolith-1"] } ]
 ```
 
 ### Different cache per VLAN
 
 ```jsonc
 "routes": [
-  { "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "cache-a" },
-  { "priority": 20, "sourceCidr": "192.168.18.0/24", "server": "cache-b" }
+  { "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["cache-a"] },
+  { "priority": 20, "sourceCidr": "192.168.18.0/24", "servers": ["cache-b"] }
 ]
 ```
 
-### Primary/standby
+### Primary with standbys
 
 ```jsonc
-{ "priority": 10, "sourceCidr": "192.168.17.0/24", "server": "cache-a",
-  "failover": { "action": "failover", "server": "cache-b" } }
+{ "priority": 10, "sourceCidr": "192.168.17.0/24", "servers": ["cache-a", "cache-b", "cache-c"] }
 ```
 
-`cache-b` can also be the primary of another VLAN's route; the two uses are independent.
+`cache-a` is used while it is Healthy, then `cache-b`, then `cache-c`. The same servers can appear in other routes, in
+any order; the routes are independent.
 
 ### Everything except one network
 
@@ -86,7 +84,7 @@ There is no negation. Put a `passthrough` row for the exception first and a wide
 
 ```jsonc
 { "priority": 10, "sourceCidr": "192.168.20.0/24", "behavior": "passthrough" },
-{ "priority": 20, "sourceCidr": "0.0.0.0/0",       "server": "cache-a" }
+{ "priority": 20, "sourceCidr": "0.0.0.0/0",       "servers": ["cache-a"] }
 ```
 
 ### Temporarily switch a row off
@@ -96,7 +94,7 @@ Set `"enabled": false` on the row instead of deleting it. A disabled row takes n
 
 ### Test from the server itself
 
-Add `{ "priority": 1, "sourceCidr": "127.0.0.1/32", "server": "…" }` and query `@127.0.0.1`.
+Add `{ "priority": 1, "sourceCidr": "127.0.0.1/32", "servers": ["…"] }` and query `@127.0.0.1`.
 
 ## Details worth knowing
 

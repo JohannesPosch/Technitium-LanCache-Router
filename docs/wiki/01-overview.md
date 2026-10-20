@@ -23,7 +23,7 @@ LanCache Router addresses all three inside the DNS server itself, as **one Techn
 | **Domain list** | Downloads the list of cacheable domains from [uklans/cache-domains](https://github.com/uklans/cache-domains) on a schedule you set with a cron expression. |
 | **Cache servers** | You define any number of cache servers, each with one IPv4 address and a health check. |
 | **Health checking** | Every enabled server is probed (TCP or HTTP). It is only handed out while **Healthy**. |
-| **Routing table** | A table of *client network → cache server* rows, each with a priority, a behavior and a failover rule. |
+| **Routing table** | A table of *client network → cache server* rows, each with a priority, a behavior and an ordered list of servers (the later ones are failovers). |
 | **Safe by default** | Clients that match no row, domains that are not in the list, and unhealthy caches are all handled by normal DNS. |
 
 ## What the app does *not* do
@@ -43,4 +43,4 @@ LanCache Router addresses all three inside the DNS server itself, as **one Techn
 | **Route** | One row of the routing table. |
 | **Passthrough** | The app does nothing; Technitium resolves the query as it always would. |
 | **Healthy / Unknown / Unhealthy / Disabled** | The state of a cache server. Only **Healthy** servers are used. See [Health checks](06-health-checks.md). |
-| **Failover** | What a route does when its primary server is not Healthy. |
+| **Failover** | A route lists its servers in order of preference; if the first is not Healthy the next one is used, and so on. |
