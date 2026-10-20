@@ -90,7 +90,10 @@ If a resolver caches answers, wait for the TTL (60 s) or use `dig` directly agai
 
 - The app **sends** nothing to clients except DNS answers and **receives** nothing except what Technitium hands it.
 - Outbound connections: HTTP(S) to `baseUrl` (through Technitium's proxy if configured) and probes to the cache servers.
-- It never executes anything from the downloaded list, only parses text. Download size, time and file locations are
-  restricted ([Domain list → Safety limits](07-domain-list.md#safety-limits)).
+- It never executes anything from the downloaded list, only parses text. Download size, time, number of files and
+  patterns, file locations and redirects are restricted ([Domain list → Safety limits](07-domain-list.md#safety-limits));
+  the redirect check can be switched off with [`security`](04-configuration-reference.md#security), which is warned about.
+- Text that comes from outside (queried names, lines and file names of the downloaded list, error messages) is logged
+  with control characters written as `\xNN`, so it cannot forge log lines, and cut at a safe length.
 - HTTPS health checks skip certificate validation by design (the target is an IP address and only liveness is tested).
-- There are no secrets in the configuration.
+- There are no secrets in the configuration, and `baseUrl` may not contain credentials.

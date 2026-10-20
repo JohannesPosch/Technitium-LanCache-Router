@@ -30,7 +30,8 @@ public static class ConfigValidator
         if (errors.Count > 0)
             return;
 
-        ValidateDomainList(config.DomainList, errors);
+        ValidateDomainList(config.DomainList, errors, warnings);
+        ValidateSecurity(config.Security, errors, warnings);
         ValidateHealthCheckSettings(config.HealthCheckDefaults, "healthCheckDefaults", errors);
         ValidateCacheServers(config, errors);
         ValidateRoutes(config, errors, warnings);
@@ -56,6 +57,7 @@ public static class ConfigValidator
         Require(config.Routes, "routes");
         Require(config.Dns, "dns");
         Require(config.Logging, "logging");
+        Require(config.Security, "security");
 
         if (config.DomainList is { } list)
         {
@@ -99,10 +101,22 @@ public static class ConfigValidator
     /// </summary>
     /// <param name="list">The settings to check.</param>
     /// <param name="errors">Receives one entry per problem.</param>
-    private static void ValidateDomainList(DomainListConfig list, List<string> errors)
+    /// <param name="warnings">Receives one entry per suspicious setting.</param>
+    private static void ValidateDomainList(DomainListConfig list, List<string> errors, List<string> warnings)
     {
         if (!Uri.TryCreate(list.BaseUrl, UriKind.Absolute, out Uri? uri) || uri.Scheme is not ("http" or "https"))
+        {
             errors.Add("domainList.baseUrl must be an absolute http(s) URL");
+        }
+        else if (uri.UserInfo.Length > 0)
+        {
+            // Never used for authentication, but it would end up in logs and in the persisted snapshot.
+            errors.Add("domainList.baseUrl must not contain credentials (user:password@)");
+        }
+        else if (uri.Scheme == "http")
+        {
+            warnings.Add("domainList.baseUrl uses plain http: the list is neither encrypted nor authenticated, so anyone on the network path can change which domains are redirected to your cache. Use https, or a source on a network you trust");
+        }
 
         string[] cronFields = list.RefreshCron.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (cronFields.Length is not (5 or 6))
@@ -141,6 +155,27 @@ public static class ConfigValidator
 
         foreach (string service in list.Services.Include.Intersect(list.Services.Exclude, StringComparer.OrdinalIgnoreCase))
             errors.Add($"domainList.services: '{service}' is both included and excluded");
+    }
+
+    /// <summary>
+    /// Range-checks the limits and warns about protective checks that are switched off.
+    /// </summary>
+    /// <param name="security">The settings to check.</param>
+    /// <param name="errors">Receives one entry per problem.</param>
+    /// <param name="warnings">Receives one entry per switched-off check.</param>
+    private static void ValidateSecurity(SecurityConfig security, List<string> errors, List<string> warnings)
+    {
+        if (security.MaxDomainFiles < 1)
+            errors.Add("security.maxDomainFiles must be >= 1");
+
+        if (security.MaxDomainListCharacters < 1)
+            errors.Add("security.maxDomainListCharacters must be >= 1");
+
+        if (security.MaxDomainPatterns < 1)
+            errors.Add("security.maxDomainPatterns must be >= 1");
+
+        if (!security.RestrictDownloadRedirects)
+            warnings.Add("security.restrictDownloadRedirects is off: a redirect can make the domain-list download read from any server the Technitium host can reach");
     }
 
     /// <summary>

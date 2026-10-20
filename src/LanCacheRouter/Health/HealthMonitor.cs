@@ -228,7 +228,7 @@ public sealed class HealthMonitor : IDisposable
                     ProbeResult result = await ExecuteProbeAsync(cancellationToken);
 
                     if (_check.Verbose || _owner._config?.Logging.Verbose == true)
-                        _owner._log($"Health probe {_serverName}/{_address}: {(result.Success ? "OK" : "FAILED")} ({result.Detail})");
+                        _owner._log($"Health probe {_serverName}/{_address}: {(result.Success ? "OK" : "FAILED")} ({SafeLog.Escape(result.Detail)})");
 
                     if (_tracker.RecordResult(result.Success) is not null)
                         _owner.OnServerChanged();

@@ -1,4 +1,5 @@
 using LanCacheRouter.Config;
+using LanCacheRouter.DomainList;
 
 namespace LanCacheRouter.Tests.Config;
 
@@ -422,6 +423,93 @@ public class ConfigParserTests
     public void BaseUrl_AcceptedForms(string url)
     {
         Assert.True(Parse(Replace(Minimal, "\"routes\"", $"\"domainList\": {{ \"baseUrl\": \"{url}\" }}, \"routes\"")).IsValid);
+    }
+
+    [Fact]
+    public void BaseUrl_PlainHttp_IsAccepted_ButWarnedAbout()
+    {
+        ConfigParseResult result = Parse(Replace(Minimal, "\"routes\"", "\"domainList\": { \"baseUrl\": \"http://10.0.0.5:8080/lists/\" }, \"routes\""));
+
+        Assert.True(result.IsValid);
+        Assert.Single(result.Warnings, w => w.Contains("domainList.baseUrl") && w.Contains("plain http"));
+    }
+
+    [Fact]
+    public void BaseUrl_Https_HasNoWarning()
+    {
+        Assert.Empty(Parse(Replace(Minimal, "\"routes\"", "\"domainList\": { \"baseUrl\": \"https://example.test/x/\" }, \"routes\"")).Warnings);
+    }
+
+    [Theory]
+    [InlineData("https://user:secret@example.test/x/")]
+    [InlineData("http://user@example.test/x/")]
+    public void BaseUrl_WithCredentials_IsRejected_WithoutRepeatingThem(string url)
+    {
+        ConfigParseResult result = Parse(Replace(Minimal, "\"routes\"", $"\"domainList\": {{ \"baseUrl\": \"{url}\" }}, \"routes\""));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("baseUrl") && e.Contains("credentials"));
+        Assert.DoesNotContain(result.Errors, e => e.Contains("secret"));
+    }
+
+    [Fact]
+    public void Security_RestrictsDownloadRedirects_ByDefault()
+    {
+        ConfigParseResult result = Parse(Minimal);
+
+        Assert.True(result.Config!.Security.RestrictDownloadRedirects);
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("security"));
+    }
+
+    [Fact]
+    public void Security_CanSwitchOffTheRedirectCheck_WithAWarning()
+    {
+        ConfigParseResult result = Parse(Replace(Minimal, "\"routes\"", "\"security\": { \"restrictDownloadRedirects\": false }, \"routes\""));
+
+        Assert.True(result.IsValid);
+        Assert.False(result.Config!.Security.RestrictDownloadRedirects);
+        Assert.Single(result.Warnings, w => w.Contains("security.restrictDownloadRedirects is off"));
+    }
+
+    [Fact]
+    public void Security_Limits_HaveTheDefaultsOfTheFetcher()
+    {
+        SecurityConfig security = Parse(Minimal).Config!.Security;
+
+        Assert.Equal(DomainListLimits.Default, new DomainListLimits(security.MaxDomainFiles, security.MaxDomainListCharacters, security.MaxDomainPatterns));
+    }
+
+    [Fact]
+    public void Security_Limits_CanBeChanged_WithoutWarning()
+    {
+        ConfigParseResult result = Parse(Replace(Minimal, "\"routes\"",
+            "\"security\": { \"maxDomainFiles\": 1000, \"maxDomainListCharacters\": 5000000000, \"maxDomainPatterns\": 7 }, \"routes\""));
+
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+        Assert.Equal(1000, result.Config!.Security.MaxDomainFiles);
+        Assert.Equal(5_000_000_000, result.Config.Security.MaxDomainListCharacters);
+        Assert.Equal(7, result.Config.Security.MaxDomainPatterns);
+        Assert.Empty(result.Warnings);
+    }
+
+    [Theory]
+    [InlineData("maxDomainFiles", "0")]
+    [InlineData("maxDomainFiles", "-1")]
+    [InlineData("maxDomainListCharacters", "0")]
+    [InlineData("maxDomainPatterns", "0")]
+    [InlineData("maxDomainPatterns", "-5")]
+    public void Security_Limits_BelowOne_AreRejected(string option, string value)
+    {
+        ConfigParseResult result = Parse(Replace(Minimal, "\"routes\"", $"\"security\": {{ \"{option}\": {value} }}, \"routes\""));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains($"security.{option}"));
+    }
+
+    [Fact]
+    public void Security_UnknownOption_IsRejected()
+    {
+        Assert.False(Parse(Replace(Minimal, "\"routes\"", "\"security\": { \"restrictRedirects\": false }, \"routes\"")).IsValid);
     }
 
     [Theory]

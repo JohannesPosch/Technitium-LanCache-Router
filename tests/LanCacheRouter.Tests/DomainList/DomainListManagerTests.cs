@@ -297,6 +297,35 @@ public sealed class DomainListManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task Downloads_AreConfinedToTheBaseUrl_UnlessTheSecurityFlagIsOff()
+    {
+        ConfinementRecordingSource restricted = new(_source);
+        ManagerWith(restricted).Apply(Config());
+        Assert.True(await PumpUntil(() => _manager!.Matcher.Count > 0, NoTime));
+        Assert.All(restricted.Confinements, c => Assert.Equal(new Uri(FakeDomainSource.BaseUrl), c));
+        _manager!.Dispose();
+
+        ConfinementRecordingSource open = new(_source);
+        ManagerWith(open).Apply(Config(), new SecurityConfig { RestrictDownloadRedirects = false });
+        Assert.True(await PumpUntil(() => !open.Confinements.IsEmpty && _manager!.Matcher.Count > 0, NoTime));
+        Assert.All(open.Confinements, Assert.Null);
+    }
+
+    [Fact]
+    public async Task ConfiguredLimits_AreEnforced_AndFailTheRefreshLikeAnyOther()
+    {
+        // The fake repository has two files; the limit allows one.
+        Manager().Apply(Config(), new SecurityConfig { MaxDomainFiles = 1 });
+
+        Assert.True(await PumpUntil(() => _logs.Any(l => l.Contains("refresh failed") && l.Contains("limit of 1 files")), NoTime));
+        Assert.Equal(0, _manager!.Matcher.Count);
+
+        // Saving the configuration with a higher limit lets the next download through.
+        _manager.Apply(Config(), new SecurityConfig { MaxDomainFiles = 2, RestrictDownloadRedirects = true });
+        Assert.True(await PumpUntil(() => _manager.Matcher.Count > 0, NoTime));
+    }
+
+    [Fact]
     public async Task WorksWithoutAStore()
     {
         _manager = new DomainListManager(_source, store: null, _logs.Enqueue, _time, TimeSpan.Zero);

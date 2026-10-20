@@ -26,7 +26,15 @@ public sealed class HttpDomainSource : IDomainSource
     }
 
     /// <inheritdoc/>
-    public async Task<string> GetStringAsync(Uri url, TimeSpan timeout, CancellationToken cancellationToken)
+    public Task<string> GetStringAsync(Uri url, TimeSpan timeout, CancellationToken cancellationToken)
+        => GetStringAsync(url, null, timeout, cancellationToken);
+
+    /// <remarks>
+    /// The client follows redirects, and the final location is only known once the response arrives, so the check rejects the
+    /// response (its body is never read or used) but cannot stop the request to the redirect target from being sent.
+    /// </remarks>
+    /// <inheritdoc/>
+    public async Task<string> GetStringAsync(Uri url, Uri? confinedTo, TimeSpan timeout, CancellationToken cancellationToken)
     {
         using CancellationTokenSource timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
@@ -34,6 +42,14 @@ public sealed class HttpDomainSource : IDomainSource
         try
         {
             using HttpResponseMessage response = await _client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, timeoutSource.Token);
+
+            if (confinedTo is not null)
+            {
+                Uri? finalUrl = response.RequestMessage?.RequestUri;
+                if (finalUrl is null || !UriScope.IsWithin(finalUrl, confinedTo))
+                    throw new HttpRequestException($"Request to {url} was redirected to {SafeLog.Escape(finalUrl)}, which is outside {confinedTo}, and is rejected");
+            }
+
             response.EnsureSuccessStatusCode();
 
             if (response.Content.Headers.ContentLength > _maxBytes)

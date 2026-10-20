@@ -1,3 +1,5 @@
+using LanCacheRouter.DomainList;
+
 namespace LanCacheRouter.Config;
 
 /// <summary>
@@ -76,6 +78,11 @@ public sealed class RouterConfig
     /// Settings for the synthesized DNS answers.
     /// </summary>
     public DnsConfig Dns { get; init; } = new();
+
+    /// <summary>
+    /// Protective checks that are on by default and can be switched off here.
+    /// </summary>
+    public SecurityConfig Security { get; init; } = new();
 
     /// <summary>
     /// Log output settings.
@@ -430,6 +437,35 @@ public sealed class DnsConfig
     /// How HTTPS/SVCB queries for cache domains are handled.
     /// </summary>
     public NodataMode HttpsMode { get; init; } = NodataMode.Nodata;
+}
+
+/// <summary>
+/// Protective checks and limits. The checks are on by default and each can be switched off for setups that need the
+/// behavior it prevents; the limits have generous defaults and can be raised (or lowered).
+/// </summary>
+public sealed class SecurityConfig
+{
+    /// <summary>
+    /// Whether a download of the domain list is rejected if redirects led it outside the base URL (another scheme, host or
+    /// port, or a path above the base path). Without this, an index or mirror that redirects could make the app request
+    /// and read any URL the Technitium server can reach. Switch it off only for a mirror that redirects on purpose.
+    /// </summary>
+    public bool RestrictDownloadRedirects { get; init; } = true;
+
+    /// <summary>
+    /// Most distinct domain files (not counting the index) that one download of the domain list may fetch.
+    /// </summary>
+    public int MaxDomainFiles { get; init; } = DomainListLimits.Default.MaxFiles;
+
+    /// <summary>
+    /// Most text, summed over the index and all domain files, that one download of the domain list may read.
+    /// </summary>
+    public long MaxDomainListCharacters { get; init; } = DomainListLimits.Default.MaxTotalCharacters;
+
+    /// <summary>
+    /// Most patterns, summed over all services, that one download of the domain list may produce.
+    /// </summary>
+    public int MaxDomainPatterns { get; init; } = DomainListLimits.Default.MaxPatterns;
 }
 
 /// <summary>

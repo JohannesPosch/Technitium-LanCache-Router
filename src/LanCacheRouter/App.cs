@@ -103,7 +103,7 @@ public sealed class App : IDnsApplication, IDnsRequestBlockingHandler, IDnsAppli
 
 				_health.Apply(newConfig);
 				_domains.Verbose = newConfig.Logging.Verbose;
-				_domains.Apply(newConfig.DomainList);
+				_domains.Apply(newConfig.DomainList, newConfig.Security);
 				Log($"enabled with {newConfig.CacheServers.Count} cache server(s) and {newConfig.Routes.Count} route(s)");
 			}
 			else
@@ -145,7 +145,7 @@ public sealed class App : IDnsApplication, IDnsRequestBlockingHandler, IDnsAppli
 	/// <param name="config">The configuration that is being applied.</param>
 	private void LogEffectiveConfig(RouterConfig config)
 	{
-		Log($"verbose: enabled={config.Enabled}, domain list {config.DomainList.BaseUrl}, refresh '{config.DomainList.RefreshCron}'");
+		Log($"verbose: enabled={config.Enabled}, domain list {config.DomainList.BaseUrl}, refresh '{config.DomainList.RefreshCron}', restrictDownloadRedirects={config.Security.RestrictDownloadRedirects}");
 
 		foreach (CacheServerConfig server in config.CacheServers)
 			Log($"verbose: cache server '{server.Name}' {server.Address} enabled={server.Enabled}, health check {config.ResolveHealthCheck(server)}");

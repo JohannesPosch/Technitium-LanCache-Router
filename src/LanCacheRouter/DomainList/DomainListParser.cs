@@ -64,7 +64,7 @@ public static class DomainListParser
         }
         catch (JsonException ex)
         {
-            throw new FormatException($"cache_domains.json is not valid JSON: {ex.Message}", ex);
+            throw new FormatException($"cache_domains.json is not valid JSON: {SafeLog.Escape(ex.Message, 1000)}", ex);
         }
     }
 

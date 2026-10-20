@@ -21,7 +21,11 @@ public sealed class TechnitiumDomainSource : IDomainSource
     }
 
     /// <inheritdoc/>
-    public async Task<string> GetStringAsync(Uri url, TimeSpan timeout, CancellationToken cancellationToken)
+    public Task<string> GetStringAsync(Uri url, TimeSpan timeout, CancellationToken cancellationToken)
+        => GetStringAsync(url, null, timeout, cancellationToken);
+
+    /// <inheritdoc cref="HttpDomainSource.GetStringAsync(Uri, Uri, TimeSpan, CancellationToken)"/>
+    public async Task<string> GetStringAsync(Uri url, Uri? confinedTo, TimeSpan timeout, CancellationToken cancellationToken)
     {
         IDnsServer server = _server();
 
@@ -35,6 +39,6 @@ public sealed class TechnitiumDomainSource : IDomainSource
         using HttpClient client = new(handler, disposeHandler: false) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         client.DefaultRequestHeaders.UserAgent.TryParseAdd("Technitium DNS Server LanCacheRouter");
 
-        return await new HttpDomainSource(client).GetStringAsync(url, timeout, cancellationToken);
+        return await new HttpDomainSource(client).GetStringAsync(url, confinedTo, timeout, cancellationToken);
     }
 }

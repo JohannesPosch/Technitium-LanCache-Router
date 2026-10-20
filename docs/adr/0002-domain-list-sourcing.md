@@ -34,7 +34,12 @@ Each `domain_files` entry is a text file with one domain per line, wildcards as 
 ## Consequences
 - Supply-chain trust: we execute no code from the repo, only parse text; a malicious list entry could
   redirect a domain to your cache IP, so pinning is offered (point `baseUrl` at a tag or commit). There is deliberately no plausibility guard (see Decision). Entries are
-  validated as DNS names; entries like `*` or single-label TLDs are rejected.
+  validated as DNS names; entries like `*` or single-label TLDs are rejected. A plain `http://` source is accepted
+  but logged as a warning when the config is applied, since anyone on the path could then rewrite the list.
+- Resource limits: one download is bounded in files (500), total text (20 million characters) and patterns (100,000;
+  all three configurable under `security`),
+  and redirects that leave the base URL are rejected (`security.restrictDownloadRedirects`, on by default). The
+  redirect check looks at the response, so the request to the redirect target is still sent; its content is discarded.
 - GitHub rate limiting avoided by using raw content, not the API.
 
 ## Open questions

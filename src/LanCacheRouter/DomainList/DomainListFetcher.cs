@@ -1,3 +1,5 @@
+using LanCacheRouter.Config;
+
 namespace LanCacheRouter.DomainList;
 
 /// <summary>
@@ -20,8 +22,10 @@ public static class DomainListFetcher
     /// <param name="log">Receives warnings, for example about skipped invalid lines.</param>
     /// <param name="now">The time to record as <see cref="RawDomainList.FetchedAt"/>.</param>
     /// <param name="cancellationToken">Cancels the download.</param>
+    /// <param name="restrictRedirects">Whether a response that a redirect moved outside the base URL is rejected; see <see cref="SecurityConfig.RestrictDownloadRedirects"/>.</param>
+    /// <param name="limits">Bounds for the size of the download; <see cref="DomainListLimits.Default"/> if <c>null</c>.</param>
     /// <returns>The unfiltered list.</returns>
-    /// <exception cref="FormatException">The index is malformed, or it references a file outside the base URL.</exception>
+    /// <exception cref="FormatException">The index is malformed, it references a file outside the base URL, or the download exceeds <paramref name="limits"/>.</exception>
     /// <exception cref="HttpRequestException">A download failed.</exception>
     /// <exception cref="TimeoutException">A download timed out.</exception>
     public static async Task<RawDomainList> FetchAsync(
@@ -30,11 +34,27 @@ public static class DomainListFetcher
         IDomainSource source,
         Action<string> log,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool restrictRedirects = true,
+        DomainListLimits? limits = null)
     {
+        limits ??= DomainListLimits.Default;
         Uri baseUri = new(baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/", UriKind.Absolute);
+        long totalCharacters = 0;
+        int totalPatterns = 0;
 
-        string indexJson = await source.GetStringAsync(new Uri(baseUri, IndexFileName), timeout, cancellationToken);
+        async Task<string> Download(Uri url)
+        {
+            string content = await source.GetStringAsync(url, restrictRedirects ? baseUri : null, timeout, cancellationToken);
+
+            totalCharacters += content.Length;
+            if (totalCharacters > limits.MaxTotalCharacters)
+                throw new FormatException($"The domain list is larger than the limit of {limits.MaxTotalCharacters} characters in total");
+
+            return content;
+        }
+
+        string indexJson = await Download(new Uri(baseUri, IndexFileName));
         IReadOnlyList<ServiceDefinition> definitions = DomainListParser.ParseServiceIndex(indexJson);
 
         if (definitions.Count == 0)
@@ -52,17 +72,26 @@ public static class DomainListFetcher
             {
                 if (!fileCache.TryGetValue(file, out IReadOnlyList<string>? filePatterns))
                 {
+                    if (fileCache.Count >= limits.MaxFiles)
+                        throw new FormatException($"The domain list references more than the limit of {limits.MaxFiles} files");
+
                     Uri fileUri = ResolveFile(baseUri, file);
-                    string content = await source.GetStringAsync(fileUri, timeout, cancellationToken);
+                    string content = await Download(fileUri);
                     filePatterns = DomainListParser.ParseDomainFile(content, out IReadOnlyList<string> invalid);
 
                     if (invalid.Count > 0)
-                        log($"Domain list: skipped {invalid.Count} invalid line(s) in {file}, first: '{invalid[0]}'");
+                        log($"Domain list: skipped {invalid.Count} invalid line(s) in {SafeLog.Escape(file)}, first: '{SafeLog.Escape(invalid[0])}'");
 
                     fileCache[file] = filePatterns;
                 }
 
-                patterns.AddRange(filePatterns.Where(seen.Add));
+                List<string> added = [.. filePatterns.Where(seen.Add)];
+
+                totalPatterns += added.Count;
+                if (totalPatterns > limits.MaxPatterns)
+                    throw new FormatException($"The domain list has more than the limit of {limits.MaxPatterns} patterns in total");
+
+                patterns.AddRange(added);
             }
 
             services.Add(new ServiceDomains(definition.Name, patterns));
@@ -82,12 +111,10 @@ public static class DomainListFetcher
     private static Uri ResolveFile(Uri baseUri, string file)
     {
         if (!Uri.TryCreate(baseUri, file, out Uri? resolved)
-            || resolved.Scheme != baseUri.Scheme
-            || !string.Equals(resolved.Authority, baseUri.Authority, StringComparison.OrdinalIgnoreCase)
-            || !resolved.AbsolutePath.StartsWith(baseUri.AbsolutePath, StringComparison.Ordinal)
+            || !UriScope.IsWithin(resolved, baseUri)
             || file.Contains(".."))
         {
-            throw new FormatException($"Domain file '{file}' points outside the base URL and is rejected");
+            throw new FormatException($"Domain file '{SafeLog.Escape(file)}' points outside the base URL and is rejected");
         }
 
         return resolved;

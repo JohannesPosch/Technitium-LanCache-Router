@@ -73,7 +73,7 @@ public sealed class DomainSnapshotStore
         catch (Exception ex)
         {
             // Whatever is wrong with the file (unreadable, damaged, edited by hand), it must not stop the app from starting.
-            _log($"Domain list: ignoring unreadable snapshot {_path}: {ex.Message}");
+            _log($"Domain list: ignoring unreadable snapshot {_path}: {SafeLog.Escape(ex.Message)}");
             return null;
         }
     }

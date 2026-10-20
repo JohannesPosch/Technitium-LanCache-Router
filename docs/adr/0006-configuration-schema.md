@@ -58,6 +58,12 @@ save; unchanged cache servers keep their health state.
   ],
 
   "dns": { "ttl": 60, "aaaaMode": "nodata", "httpsMode": "nodata" },
+  "security": {                          // protective checks (on by default; false switches one off, with a warning) and limits
+    "restrictDownloadRedirects": true,
+    "maxDomainFiles": 500,               // limits of one domain-list download
+    "maxDomainListCharacters": 20000000,
+    "maxDomainPatterns": 100000
+  },
   "logging": { "queries": false }          // log every answered query (debugging); state changes/errors are always logged
 }
 ```
@@ -68,7 +74,10 @@ save; unchanged cache servers keep their health state.
 - All values have defaults, so a minimal config is just `cacheServers` + `routes`.
 - Time zone: there is no setting; the cron expression uses the time zone of the Technitium process (`TZ`).
 - A successful domain-list refresh is always applied (no ratio guard).
-- Secrets: none required (the dnsdist control key is gone).
+- Secrets: none required (the dnsdist control key is gone). `domainList.baseUrl` must not contain credentials
+  (`user:password@`); they would be written to logs and to the snapshot.
+- `security` holds protective checks that are on by default; the config only ever *relaxes* them. A relaxed check
+  produces a warning when the config is applied.
 - Cluster: the config is shared by all nodes, so it must be node-neutral. Health state and domain snapshot
   are per node (ADR 0001/0003).
 

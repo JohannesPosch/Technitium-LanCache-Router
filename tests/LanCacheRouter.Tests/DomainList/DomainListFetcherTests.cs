@@ -199,6 +199,144 @@ public class DomainListFetcherTests
     }
 
     [Fact]
+    public async Task Fetch_ConfinesEveryRequestToTheBaseUrl_ByDefault()
+    {
+        ConfinementRecordingSource source = new(FakeDomainSource.WithSteamAndEpic());
+
+        await DomainListFetcher.FetchAsync(FakeDomainSource.BaseUrl, Timeout, source, _ => { }, Now, CancellationToken.None);
+
+        Assert.Equal(3, source.Confinements.Count); // index + two files
+        Assert.All(source.Confinements, c => Assert.Equal(new Uri(FakeDomainSource.BaseUrl), c));
+    }
+
+    [Fact]
+    public async Task Fetch_DoesNotConfineRequests_WhenTheRedirectCheckIsOff()
+    {
+        ConfinementRecordingSource source = new(FakeDomainSource.WithSteamAndEpic());
+
+        await DomainListFetcher.FetchAsync(FakeDomainSource.BaseUrl, Timeout, source, _ => { }, Now, CancellationToken.None, restrictRedirects: false);
+
+        Assert.Equal(3, source.Confinements.Count);
+        Assert.All(source.Confinements, Assert.Null);
+    }
+
+    [Fact]
+    public async Task Fetch_Fails_WhenTheSourceRejectsARedirectedResponse()
+    {
+        FakeDomainSource inner = FakeDomainSource.WithSteamAndEpic();
+        InterceptingDomainSource source = new(inner)
+        {
+            BeforeRequest = (url, _) => url.AbsolutePath.EndsWith("steam.txt")
+                ? throw new HttpRequestException("redirected outside the base URL")
+                : Task.CompletedTask
+        };
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => Fetch(source));
+    }
+
+    private static Task<RawDomainList> Fetch(IDomainSource source, DomainListLimits? limits = null)
+        => DomainListFetcher.FetchAsync(FakeDomainSource.BaseUrl, Timeout, source, _ => { }, Now, CancellationToken.None, limits: limits);
+
+    private static FakeDomainSource Files(int count, string content = "a.example.com\n")
+    {
+        FakeDomainSource source = new();
+        source.Set("cache_domains.json", "{ \"cache_domains\": [" + string.Join(",", Enumerable.Range(0, count).Select(i => $$"""{ "name": "s{{i}}", "domain_files": ["f{{i}}.txt"] }""")) + "] }");
+        for (int i = 0; i < count; i++)
+            source.Set($"f{i}.txt", content);
+
+        return source;
+    }
+
+    [Fact]
+    public async Task Limits_TheRealListIsFarBelowTheDefaults()
+    {
+        Assert.Equal(26, (await Fetch(Files(26))).Services.Count);
+    }
+
+    [Fact]
+    public async Task Limits_NumberOfFiles_ExactlyAtTheLimitIsAccepted_OneMoreFails()
+    {
+        DomainListLimits limits = DomainListLimits.Default with { MaxFiles = 5 };
+
+        Assert.Equal(5, (await Fetch(Files(5), limits)).Services.Count);
+
+        FormatException error = await Assert.ThrowsAsync<FormatException>(() => Fetch(Files(6), limits));
+        Assert.Contains("5 files", error.Message);
+    }
+
+    [Fact]
+    public async Task Limits_AFileListedByManyServices_CountsOnce()
+    {
+        FakeDomainSource source = new();
+        source.Set("cache_domains.json", "{ \"cache_domains\": [" + string.Join(",", Enumerable.Range(0, 20).Select(i => $$"""{ "name": "s{{i}}", "domain_files": ["shared.txt"] }""")) + "] }");
+        source.Set("shared.txt", "a.example.com\n");
+
+        Assert.Equal(20, (await Fetch(source, DomainListLimits.Default with { MaxFiles = 1 })).Services.Count);
+    }
+
+    [Fact]
+    public async Task Limits_TotalSize_IsCheckedAcrossTheIndexAndAllFiles()
+    {
+        FakeDomainSource source = Files(10, content: "a.example.com\n" + new string('#', 1000)); // about 1 kB per file
+        DomainListLimits limits = DomainListLimits.Default with { MaxTotalCharacters = 5000 };
+
+        FormatException error = await Assert.ThrowsAsync<FormatException>(() => Fetch(source, limits));
+        Assert.Contains("5000 characters", error.Message);
+
+        Assert.Equal(10, (await Fetch(source, limits with { MaxTotalCharacters = 50_000 })).Services.Count);
+    }
+
+    [Fact]
+    public async Task Limits_NumberOfPatterns_ExactlyAtTheLimitIsAccepted_OneMoreFails()
+    {
+        FakeDomainSource source = Files(1, content: string.Join('\n', Enumerable.Range(0, 10).Select(i => $"h{i}.example.com")));
+
+        Assert.Single(await Task.FromResult((await Fetch(source, DomainListLimits.Default with { MaxPatterns = 10 })).Services));
+
+        FormatException error = await Assert.ThrowsAsync<FormatException>(() => Fetch(source, DomainListLimits.Default with { MaxPatterns = 9 }));
+        Assert.Contains("9 patterns", error.Message);
+    }
+
+    [Fact]
+    public async Task Limits_NumberOfPatterns_CountsEveryServiceThatListsTheSameFile()
+    {
+        // One big file referenced by many services would otherwise multiply in memory: 50 services x 10 patterns.
+        FakeDomainSource source = new();
+        source.Set("cache_domains.json", "{ \"cache_domains\": [" + string.Join(",", Enumerable.Range(0, 50).Select(i => $$"""{ "name": "s{{i}}", "domain_files": ["shared.txt"] }""")) + "] }");
+        source.Set("shared.txt", string.Join('\n', Enumerable.Range(0, 10).Select(i => $"h{i}.example.com")));
+
+        await Assert.ThrowsAsync<FormatException>(() => Fetch(source, DomainListLimits.Default with { MaxPatterns = 400 }));
+        Assert.Equal(50, (await Fetch(source, DomainListLimits.Default with { MaxPatterns = 500 })).Services.Count);
+    }
+
+    [Fact]
+    public async Task Fetch_LogsUntrustedLinesAndFileNamesEscaped()
+    {
+        FakeDomainSource source = new FakeDomainSource()
+            .Set("cache_domains.json", """{ "cache_domains": [ { "name": "n", "domain_files": ["1.txt"] } ] }""")
+            .Set("1.txt", "ok.com\nbad\rLanCache Router: forged\n");
+        List<string> log = [];
+
+        await Fetch(source, log: log);
+
+        string line = Assert.Single(log);
+        Assert.DoesNotContain('\r', line);
+        Assert.DoesNotContain('\n', line);
+        Assert.Contains("bad\\x0DLanCache Router: forged", line);
+    }
+
+    [Fact]
+    public async Task Fetch_RejectionOfAHostileFileName_CannotCarryLineBreaks()
+    {
+        FakeDomainSource source = new FakeDomainSource()
+            .Set("cache_domains.json", """{ "cache_domains": [ { "name": "n", "domain_files": ["evil\nLanCache Router: forged/../x.txt"] } ] }""");
+
+        FormatException error = await Assert.ThrowsAsync<FormatException>(() => Fetch(source));
+
+        Assert.DoesNotContain('\n', error.Message);
+    }
+
+    [Fact]
     public async Task Fetch_HandlesHundredsOfServices()
     {
         FakeDomainSource source = new();

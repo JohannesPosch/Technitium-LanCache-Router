@@ -35,6 +35,7 @@ public class ConfigRobustnessTests
         """{ "domainList": { "excludeDomains": [ null ] } }""",
         """{ "dns": null }""",
         """{ "logging": null }""",
+        """{ "security": null }""",
         """{ "healthCheckDefaults": { "expectedStatus": [ null ] } }""",
         """{ "enabled": "yes" }""",
         """{ "routes": [ { "priority": 99999999999 } ] }""",

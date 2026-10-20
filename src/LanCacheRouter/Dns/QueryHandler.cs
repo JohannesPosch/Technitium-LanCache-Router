@@ -78,7 +78,7 @@ public sealed class QueryHandler
 
 			if (response is not null && state.LogQueries)
 			{
-				_log($"Answered {remoteEP.Address} {question.Type} {question.Name} [{service}] -> {decision.Server!.Name} ({decision.Server.Address}) [{decision.Position}/{decision.Route!.Servers.Count}]"
+				_log($"Answered {remoteEP.Address} {question.Type} {SafeLog.Escape(question.Name)} [{service}] -> {decision.Server!.Name} ({decision.Server.Address}) [{decision.Position}/{decision.Route!.Servers.Count}]"
 					+ (decision.FailedOver ? $" (failover, preferred: {string.Join(", ", decision.Route.Servers.Take(decision.Position - 1))} not Healthy)" : "")
 					+ (response.Answer.Count == 0 ? " (no data)" : ""));
 			}
@@ -91,7 +91,7 @@ public sealed class QueryHandler
 		}
 		catch (Exception ex)
 		{
-			_log($"Error handling query, passing it through: {ex}");
+			_log($"Error handling query, passing it through: {SafeLog.Describe(ex)}");
 			return null;
 		}
 	}
@@ -102,7 +102,7 @@ public sealed class QueryHandler
 	private DnsDatagram? Skip(State state, IPEndPoint remoteEP, DnsQuestionRecord? question, string reason)
 	{
 		if (state.Verbose)
-			_log($"Passed through {remoteEP.Address} {question?.Type} {question?.Name}: {reason}");
+			_log($"Passed through {remoteEP.Address} {question?.Type} {SafeLog.Escape(question?.Name)}: {reason}");
 
 		return null;
 	}

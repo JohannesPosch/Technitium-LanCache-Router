@@ -219,6 +219,27 @@ public class QueryHandlerTests
     }
 
     [Fact]
+    public void LoggedQueryNames_CannotForgeLogLines()
+    {
+        // A wildcard lets a client choose the labels of the name, and Technitium does not validate names it reads from the wire
+        // (only the constructor does, hence validateName: false), so a DNS label may hold any byte.
+        QueryHandler verbose = Handler(Config(", \"logging\": { \"verbose\": true }"));
+        DnsDatagram hostile = new(1, false, DnsOpcode.StandardQuery, false, false, true, false, false, false, DnsResponseCode.NoError,
+            [new DnsQuestionRecord("x\r\nLanCache Router: forged.steamcontent.com", DnsResourceRecordType.A, DnsClass.IN, validateName: false)]);
+
+        verbose.Handle(hostile, TestDns.Client("192.168.17.50")); // answered
+        verbose.Handle(hostile, TestDns.Client("10.9.9.9")); // passed through
+
+        string[] lines = [.. _logs];
+        Assert.Equal(2, lines.Length);
+        Assert.All(lines, l => Assert.DoesNotContain('\r', l));
+        Assert.All(lines, l => Assert.Contains("\\x0D\\x0A", l));
+        // The answered query fails inside Technitium's name validation and is logged with its exception, whose stack trace
+        // spans lines; none of them may be the forged one.
+        Assert.All(lines, l => Assert.DoesNotContain(l.Split('\n'), part => part.StartsWith("LanCache Router: forged")));
+    }
+
+    [Fact]
     public void VerboseLogging_ExplainsWhyQueriesArePassedThrough()
     {
         QueryHandler verbose = Handler(Config(", \"logging\": { \"verbose\": true }"));

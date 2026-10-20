@@ -34,6 +34,7 @@ public sealed class DomainListManager : IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _jitter;
     private DomainListConfig? _config;
+    private SecurityConfig _security = new();
     private RawDomainList? _raw;
     private DomainMatcher _matcher = DomainMatcher.Empty;
     private CancellationTokenSource? _loop;
@@ -90,7 +91,8 @@ public sealed class DomainListManager : IDisposable
     /// <c>refreshOnStartup</c> is set, if the base URL changed, or if there is no list at all. The cron schedule restarts.
     /// </summary>
     /// <param name="config">The validated domain-list settings.</param>
-    public void Apply(DomainListConfig config)
+    /// <param name="security">The validated security settings; the defaults (everything restricted) if <c>null</c>.</param>
+    public void Apply(DomainListConfig config, SecurityConfig? security = null)
     {
         lock (_gate)
         {
@@ -104,6 +106,7 @@ public sealed class DomainListManager : IDisposable
             _loop = new CancellationTokenSource();
             long generation = ++_generation;
             _config = config;
+            _security = security ?? new SecurityConfig();
 
             // After a source change, prefer a persisted list of the new source; otherwise keep serving the list in memory
             // (domains of the old source are still cache domains) until the download from the new source succeeds.
@@ -114,7 +117,8 @@ public sealed class DomainListManager : IDisposable
 
             bool refreshNow = _raw is null || urlChanged || (first && config.RefreshOnStartup);
             CancellationToken token = _loop.Token;
-            _ = Task.Run(() => RunAsync(config, generation, refreshNow, token));
+            SecurityConfig applied = _security;
+            _ = Task.Run(() => RunAsync(config, applied, generation, refreshNow, token));
         }
     }
 
@@ -164,7 +168,7 @@ public sealed class DomainListManager : IDisposable
 
         if (!SameBaseUrl(snapshot.BaseUrl, config.BaseUrl))
         {
-            _log($"Domain list: ignoring persisted snapshot from {snapshot.BaseUrl}, configured source is {config.BaseUrl}");
+            _log($"Domain list: ignoring persisted snapshot from {SafeLog.Escape(snapshot.BaseUrl)}, configured source is {config.BaseUrl}");
             return null;
         }
 
@@ -188,7 +192,7 @@ public sealed class DomainListManager : IDisposable
         if (Verbose)
         {
             foreach (var service in matcher.ServiceCounts)
-                _log($"Domain list: service '{service.Key}': {service.Value} pattern(s) active");
+                _log($"Domain list: service '{SafeLog.Escape(service.Key)}': {service.Value} pattern(s) active");
         }
     }
 
@@ -198,7 +202,7 @@ public sealed class DomainListManager : IDisposable
     /// <see cref="Apply"/> or on dispose. An unexpected error is logged and the loop carries on after <see cref="RetryDelay"/>,
     /// because a loop that dies silently would leave the list to go stale unnoticed.
     /// </summary>
-    private async Task RunAsync(DomainListConfig config, long generation, bool refreshNow, CancellationToken cancellationToken)
+    private async Task RunAsync(DomainListConfig config, SecurityConfig security, long generation, bool refreshNow, CancellationToken cancellationToken)
     {
         try
         {
@@ -210,7 +214,7 @@ public sealed class DomainListManager : IDisposable
 
             if (refreshNow)
             {
-                bool ok = await RefreshAsync(config, generation, cancellationToken);
+                bool ok = await RefreshAsync(config, security, generation, cancellationToken);
                 retryAt = ok ? null : _timeProvider.GetUtcNow() + RetryDelay;
             }
 
@@ -237,12 +241,12 @@ public sealed class DomainListManager : IDisposable
 
                     await WaitUntilAsync(due.Value, cancellationToken);
 
-                    bool refreshed = await RefreshAsync(config, generation, cancellationToken);
+                    bool refreshed = await RefreshAsync(config, security, generation, cancellationToken);
                     retryAt = refreshed ? null : _timeProvider.GetUtcNow() + RetryDelay;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _log($"Domain list: unexpected error in the refresh loop, trying again in {RetryDelay.TotalMinutes:0} min: {ex}");
+                    _log($"Domain list: unexpected error in the refresh loop, trying again in {RetryDelay.TotalMinutes:0} min: {SafeLog.Describe(ex)}");
                     retryAt = null;
                     await Task.Delay(RetryDelay, _timeProvider, cancellationToken);
                 }
@@ -254,7 +258,7 @@ public sealed class DomainListManager : IDisposable
         }
         catch (Exception ex)
         {
-            _log($"Domain list: the refresh loop stopped unexpectedly, the list is not refreshed until the configuration is saved again: {ex}");
+            _log($"Domain list: the refresh loop stopped unexpectedly, the list is not refreshed until the configuration is saved again: {SafeLog.Describe(ex)}");
         }
     }
 
@@ -275,7 +279,7 @@ public sealed class DomainListManager : IDisposable
     /// Downloads the list and, if that fully succeeded and the configuration has not been replaced meanwhile, swaps it in.
     /// </summary>
     /// <returns><c>true</c> if the list was refreshed; <c>false</c> if the download failed (logged) and the old list stays.</returns>
-    private async Task<bool> RefreshAsync(DomainListConfig config, long generation, CancellationToken cancellationToken)
+    private async Task<bool> RefreshAsync(DomainListConfig config, SecurityConfig security, long generation, CancellationToken cancellationToken)
     {
         RawDomainList fetched;
 
@@ -290,11 +294,13 @@ public sealed class DomainListManager : IDisposable
                 _source,
                 _log,
                 _timeProvider.GetUtcNow(),
-                cancellationToken);
+                cancellationToken,
+                security.RestrictDownloadRedirects,
+                new DomainListLimits(security.MaxDomainFiles, security.MaxDomainListCharacters, security.MaxDomainPatterns));
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            _log($"Domain list: refresh failed, keeping the previous list ({(_raw is null ? "none available yet" : $"from {_raw.FetchedAt:u}")}); retrying in {RetryDelay.TotalMinutes:0} min or at the next scheduled time: {ex.Message}");
+            _log($"Domain list: refresh failed, keeping the previous list ({(_raw is null ? "none available yet" : $"from {_raw.FetchedAt:u}")}); retrying in {RetryDelay.TotalMinutes:0} min or at the next scheduled time: {SafeLog.Escape(ex.Message, 1000)}");
             return false;
         }
 

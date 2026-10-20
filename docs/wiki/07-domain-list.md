@@ -60,9 +60,21 @@ are used, exactly as for Technitium's block-list downloads.
 ### Safety limits
 
 - Each file is limited to **5 MB**.
+- One download is limited as a whole, so a hostile or broken source cannot use up the server's memory: by default at most
+  **500 domain files**, **20 million characters** of text in total (index included) and **100,000 patterns** in total
+  (counted per service, so a file that many services list counts for each of them). The limits can be changed in
+  [`security`](04-configuration-reference.md#security). The real list is a few kilobytes
+  with about 130 entries. Exceeding a limit fails the refresh like any other failed download: the previous list stays
+  active and the refresh is retried.
 - Each request has the `httpTimeoutSeconds` timeout.
 - Files must live on the **same host and below the base path** as the index; an index that points elsewhere
   (another host, `..`, an absolute path) fails the refresh.
+- **Redirects** are followed by the HTTP client, so the above would not be enough on its own. With
+  [`security.restrictDownloadRedirects`](04-configuration-reference.md#security) (on by default) a response that a
+  redirect moved outside the `baseUrl` folder is rejected and fails the refresh. The check looks at the response, so the
+  request to the redirect target has already been sent; its content is discarded unread.
+- A plain `http://` `baseUrl` is allowed but logged as a warning, because the list can then be changed on its way. Use
+  `https://`, or pin the list to a tag or commit.
 - Lines that are not valid domain patterns are skipped and logged (`skipped 2 invalid line(s) in x.txt, first: '…'`);
   they do not fail the refresh. `*`, single labels like `com` and `*.com` are rejected.
 

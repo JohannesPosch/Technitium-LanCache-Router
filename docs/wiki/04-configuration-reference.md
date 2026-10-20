@@ -24,6 +24,7 @@ The configuration is one JSON document, edited in the Technitium web UI under **
   "cacheServers":        [ … ],   // the caches
   "routes":              [ … ],   // which client network uses which cache
   "dns":                 { … },   // what the DNS answers look like
+  "security":            { … },   // protective checks (on by default)
   "logging":             { … }    // extra logging
 }
 ```
@@ -43,7 +44,7 @@ Where the cache domains come from and how they are filtered. Details in [Domain 
 
 | Option | Type, default | Valid values | Effect |
 |---|---|---|---|
-| `baseUrl` | string, `https://raw.githubusercontent.com/uklans/cache-domains/master/` | absolute `http(s)` URL; a missing trailing `/` is added | Folder that contains `cache_domains.json` and the domain files. Point it at a tag or commit (`…/cache-domains/<commit>/`) to **pin** the list, or at a mirror you host. **Changing it triggers an immediate download.** |
+| `baseUrl` | string, `https://raw.githubusercontent.com/uklans/cache-domains/master/` | absolute `http(s)` URL without credentials (`user:password@` is rejected); a missing trailing `/` is added | Folder that contains `cache_domains.json` and the domain files. Point it at a tag or commit (`…/cache-domains/<commit>/`) to **pin** the list, or at a mirror you host. **Changing it triggers an immediate download.** A plain `http://` URL is accepted but produces a **warning**: the list is then neither encrypted nor authenticated. |
 | `refreshCron` | string, `"0 4 * * *"` | cron expression with **5 fields** (`min hour day month weekday`) or **6 fields** (leading `seconds`) | When the list is downloaded again. Evaluated in the **time zone of the Technitium process** (see below). Each node adds a random delay of 0–2 minutes. |
 | `refreshOnStartup` | boolean, `true` | | Download once when the app first starts. Even when `false`, a download happens at start if there is **no list at all** (no snapshot yet). |
 | `httpTimeoutSeconds` | integer, `30` | 1–86400 | Timeout for **each** HTTP request (the index and each domain file). |
@@ -167,6 +168,26 @@ What the answers look like. Details in [DNS answers](08-dns-answers.md).
 
 ---
 
+## `security`
+
+Protective checks and limits. The checks are **on by default**; this section exists to switch one off if your setup
+needs that, which produces a warning each time the configuration is applied. The limits bound what one download of the
+domain list may use; the defaults are far above the real list (a few kilobytes, about 130 entries) and rarely need a change.
+
+| Option | Type, default | Effect |
+|---|---|---|
+| `restrictDownloadRedirects` | boolean, `true` | The HTTP client follows redirects. With this check on, a download of the domain list is **rejected** if it ended up anywhere but the `baseUrl` folder (another scheme, host or port, or a path above the base path). Without it, a redirecting index or mirror could make the Technitium server fetch and read any URL it can reach. Turn it off only for a mirror that redirects on purpose (for example from `http` to `https` or to a CDN). The check inspects the response, so the request to the redirect target has already been sent when it is rejected; its content is discarded and never parsed. |
+| `maxDomainFiles` | integer, `500` | ≥ 1 | Most distinct domain files (the index not counted) one download may fetch. |
+| `maxDomainListCharacters` | integer, `20000000` | ≥ 1 | Most text, summed over the index and all domain files, one download may read. Each file is also limited to 5 MB. |
+| `maxDomainPatterns` | integer, `100000` | ≥ 1 | Most patterns, summed over all services, one download may produce (a file that several services list counts once per service). |
+
+A download that exceeds a limit fails as a whole: the previous list stays active and the refresh is retried (the log
+says which limit was hit).
+
+To switch the check off set `"security": { "restrictDownloadRedirects": false }`.
+
+---
+
 ## `logging`
 
 | Option | Type, default | Effect |
@@ -205,6 +226,7 @@ A complete configuration with two cache servers, the second one used as failover
   ],
 
   "dns": { "ttl": 60 },
+  "security": { "restrictDownloadRedirects": true, "maxDomainFiles": 500, "maxDomainListCharacters": 20000000, "maxDomainPatterns": 100000 },
   "logging": { "queries": false, "verbose": false }
 }
 ```
@@ -215,6 +237,8 @@ A complete configuration with two cache servers, the second one used as failover
 |---|---|
 | `domainList.refreshCron must have 5 or 6 fields` / `is invalid` | not a valid cron expression |
 | `…address 'x' is not a valid IPv4 address` | typo, IPv6 address, or a shorthand like `10.1` |
+| `security.maxDomainFiles` / `maxDomainListCharacters` / `maxDomainPatterns must be >= 1` | a limit of zero or less would make every download fail |
+| `domainList.baseUrl must not contain credentials (user:password@)` | remove the credentials from the URL; they were never sent and would be logged |
 | `…: duplicate server name` | names are compared ignoring case |
 | `…effective timeoutSeconds (n) must not exceed intervalSeconds (m)` | check the values you set **and** the defaults they combine with |
 | `routes[priority=n]: priority is used more than once` | priorities must be unique |

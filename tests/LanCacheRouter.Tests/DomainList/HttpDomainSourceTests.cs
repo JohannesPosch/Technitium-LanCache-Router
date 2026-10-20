@@ -256,6 +256,104 @@ public class HttpDomainSourceTests
         }
     }
 
+    private static Func<HttpListenerContext, Task> RedirectFrom(string fromPath, string location)
+        => async context =>
+        {
+            if (context.Request.Url!.AbsolutePath == fromPath)
+            {
+                context.Response.StatusCode = 302;
+                context.Response.RedirectLocation = location;
+            }
+            else
+            {
+                await context.Response.OutputStream.WriteAsync(Encoding.UTF8.GetBytes("moved"));
+            }
+
+            context.Response.Close();
+        };
+
+    [Fact]
+    public async Task ConfinedRedirect_StayingInsideTheFolder_IsFollowed()
+    {
+        (Uri url, HttpListener listener) = Serve(RedirectFrom("/ok/a.txt", "/ok/sub/b.txt"));
+        try
+        {
+            Assert.Equal("moved", await Source().GetStringAsync(new Uri(url, "/ok/a.txt"), new Uri(url, "/ok/"), Timeout, CancellationToken.None));
+        }
+        finally
+        {
+            listener.Close();
+        }
+    }
+
+    [Fact]
+    public async Task ConfinedRedirect_ToAnotherPathOnTheSameHost_IsRejected()
+    {
+        (Uri url, HttpListener listener) = Serve(RedirectFrom("/ok/a.txt", "/elsewhere/b.txt"));
+        try
+        {
+            HttpRequestException error = await Assert.ThrowsAsync<HttpRequestException>(
+                () => Source().GetStringAsync(new Uri(url, "/ok/a.txt"), new Uri(url, "/ok/"), Timeout, CancellationToken.None));
+
+            Assert.Contains("redirected", error.Message);
+            Assert.Contains("/elsewhere/b.txt", error.Message);
+        }
+        finally
+        {
+            listener.Close();
+        }
+    }
+
+    [Fact]
+    public async Task ConfinedRedirect_ToAnotherHost_IsRejected()
+    {
+        // "localhost" and "127.0.0.1" reach the same listener, but they are different hosts as far as the rule is concerned.
+        (Uri url, HttpListener listener) = Serve(context =>
+        {
+            context.Response.StatusCode = 302;
+            context.Response.RedirectLocation = $"http://localhost:{context.Request.LocalEndPoint.Port}/ok/b.txt";
+            context.Response.Close();
+            return Task.CompletedTask;
+        });
+        try
+        {
+            await Assert.ThrowsAsync<HttpRequestException>(
+                () => Source().GetStringAsync(new Uri(url, "/ok/a.txt"), new Uri(url, "/ok/"), Timeout, CancellationToken.None));
+        }
+        finally
+        {
+            listener.Close();
+        }
+    }
+
+    [Fact]
+    public async Task ConfinedRequest_WithoutRedirect_Works()
+    {
+        (Uri url, HttpListener listener) = Serve(RedirectFrom("/never", "/never"));
+        try
+        {
+            Assert.Equal("moved", await Source().GetStringAsync(new Uri(url, "/ok/a.txt"), new Uri(url, "/ok/"), Timeout, CancellationToken.None));
+        }
+        finally
+        {
+            listener.Close();
+        }
+    }
+
+    [Fact]
+    public async Task UnconfinedRedirect_StillGoesAnywhere()
+    {
+        (Uri url, HttpListener listener) = Serve(RedirectFrom("/ok/a.txt", "/elsewhere/b.txt"));
+        try
+        {
+            Assert.Equal("moved", await Source().GetStringAsync(new Uri(url, "/ok/a.txt"), confinedTo: null, Timeout, CancellationToken.None));
+        }
+        finally
+        {
+            listener.Close();
+        }
+    }
+
     [Fact]
     public async Task Redirect_IsFollowed_ByTheDefaultClient()
     {
