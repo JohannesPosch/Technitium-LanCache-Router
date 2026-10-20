@@ -102,6 +102,8 @@ Add `{ "priority": 1, "sourceCidr": "127.0.0.1/32", "servers": ["…"] }` and qu
   dual-stack socket as `::ffff:192.168.17.50` is treated as IPv4 and matches IPv4 rows.
 - A route can only *answer with IPv4 addresses* in v1. IPv6 clients can be routed, but AAAA answers are always empty
   (see [DNS answers](08-dns-answers.md)).
+- IPv4-mapped IPv6 clients are normalized to IPv4 *before* matching, so write IPv4 networks as IPv4 (`192.168.17.0/24`). A
+  row such as `::ffff:192.168.17.0/120` is accepted but never matches.
 - Server names in routes are matched **ignoring case**.
 - The routing table is rebuilt on every configuration save and switched over atomically.
 - The client address is what Technitium sees. See [Installation → Client addresses](03-installation.md#client-addresses).

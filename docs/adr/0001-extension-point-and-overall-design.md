@@ -36,8 +36,9 @@ Flow per query:
 5. Build and return the synthesized response (ADR 0005); if nothing usable → return null (normal DNS).
 
 Components (all in one assembly, no external services):
-`DomainListManager` (fetch+cron+index) · `CacheServerRegistry` + `HealthMonitor` (background probes) ·
-`RoutingTable` · `QueryHandler` (the interface implementation) · `ConfigModel` (parse/validate).
+`DomainListManager` (fetch+cron+index) · `HealthMonitor` (background probes, health snapshot) ·
+`RoutingTable` · `QueryHandler` (per-query pipeline, called by `App`, the interface implementation) ·
+`ConfigParser` + `ConfigValidator` (parse/validate).
 
 Hot path is lock-free: domain index, routing table and health snapshot are immutable objects swapped
 atomically (`Volatile.Write`) by background tasks.

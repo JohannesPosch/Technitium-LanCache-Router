@@ -33,7 +33,7 @@ Each `domain_files` entry is a text file with one domain per line, wildcards as 
 
 ## Consequences
 - Supply-chain trust: we execute no code from the repo, only parse text; a malicious list entry could
-  redirect a domain to your cache IP, so pinning (`ref`) + sanity guard are offered. Entries are
+  redirect a domain to your cache IP, so pinning is offered (point `baseUrl` at a tag or commit). There is deliberately no plausibility guard (see Decision). Entries are
   validated as DNS names; entries like `*` or single-label TLDs are rejected.
 - GitHub rate limiting avoided by using raw content, not the API.
 

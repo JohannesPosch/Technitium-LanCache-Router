@@ -641,4 +641,72 @@ public sealed class AppTests : IDisposable
 
         Assert.True(_server.LogContains("LanCache Router: warning: routes[priority=10]: servers are ignored because behavior is passthrough"));
     }
+
+    [Fact]
+    public async Task VerboseLogging_ExplainsTheConfiguration_TheListDownload_AndEveryDecision()
+    {
+        await _app.InitializeAsync(_server, Enabled(""","logging": { "verbose": true }"""));
+        Assert.True(await WaitUntilAnswering());
+
+        Assert.Null(await Ask("www.example.com"));
+        Assert.Null(await Ask(client: "10.9.9.9"));
+
+        Assert.True(_server.LogContains("LanCache Router: verbose: cache server 'cache-1' 192.168.17.44 enabled=True"));
+        Assert.True(_server.LogContains("LanCache Router: verbose: route priority 10 192.168.17.0/24 enabled=True CacheIfHealthy servers=[cache-1]"));
+        Assert.True(await WaitFor(() => _server.LogContains($"Domain list: downloading from {FakeDomainSource.BaseUrl}")));
+        Assert.True(await WaitFor(() => _server.LogContains("Domain list: service 'steam': 2 pattern(s) active")));
+        Assert.True(_server.LogContains("Answered 192.168.17.50 A cdn.steamcontent.com [steam] -> cache-1 (192.168.17.44) [1/1]")); // verbose implies the per-query lines
+        Assert.True(_server.LogContains("Passed through 192.168.17.50 A www.example.com: not a cache domain"));
+        Assert.True(_server.LogContains("Passed through 10.9.9.9 A cdn.steamcontent.com: client matches no route"));
+    }
+
+    [Fact]
+    public async Task WithoutVerbose_NoDecisionOrConfigurationDetailsAreLogged()
+    {
+        await _app.InitializeAsync(_server, Enabled());
+        Assert.True(await WaitUntilAnswering());
+
+        Assert.Null(await Ask("www.example.com"));
+        Assert.Null(await Ask(client: "10.9.9.9"));
+        Assert.True(await WaitFor(() => _server.LogContains("Domain list: refreshed")));
+
+        Assert.False(_server.LogContains("verbose:"));
+        Assert.False(_server.LogContains("Passed through"));
+        Assert.False(_server.LogContains("Answered"));
+        Assert.False(_server.LogContains("Domain list: downloading"));
+        Assert.False(_server.LogContains("Health probe"));
+        Assert.False(_server.LogContains("pattern(s) active"));
+    }
+
+    [Fact]
+    public async Task TogglingVerboseLogging_NeitherResetsServerHealthNorInterruptsService()
+    {
+        // A real TCP probe, so that a reset to Unknown would be visible: the server needs three probes to become Healthy again.
+        using System.Net.Sockets.TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        string Config(bool verbose) => $$"""
+            {
+              "domainList": { "baseUrl": "{{FakeDomainSource.BaseUrl}}" },
+              "healthCheckDefaults": { "type": "tcp", "port": {{port}}, "intervalSeconds": 60, "successThreshold": 3 },
+              "cacheServers": [ { "name": "cache-1", "address": "127.0.0.1" } ],
+              "routes": [ { "priority": 10, "sourceCidr": "127.0.0.1/32", "servers": ["cache-1"] } ],
+              "logging": { "verbose": {{(verbose ? "true" : "false")}} }
+            }
+            """;
+
+        await _app.InitializeAsync(_server, Config(verbose: false));
+        Assert.True(await WaitFor(() => _server.LogContains("Unknown -> Healthy")));
+        Assert.NotNull(await Ask(client: "127.0.0.1"));
+
+        foreach (bool verbose in new[] { true, false, true })
+        {
+            await _app.InitializeAsync(_server, Config(verbose));
+            Assert.NotNull(await Ask(client: "127.0.0.1")); // served at once: still Healthy, not restarted as Unknown
+        }
+
+        Assert.False(_server.LogContains("Healthy -> Unknown"));
+        Assert.False(_server.LogContains("Healthy -> Unhealthy"));
+    }
 }

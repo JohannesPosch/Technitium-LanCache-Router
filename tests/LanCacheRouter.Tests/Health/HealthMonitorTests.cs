@@ -251,6 +251,32 @@ public class HealthMonitorTests : IDisposable
     }
 
     [Fact]
+    public async Task GlobalVerboseLogging_LogsProbesOfRunningServers_WithoutRestartingThem()
+    {
+        string servers = Server("s", "10.0.0.1");
+        _monitor.Apply(Config(servers, "\"successThreshold\": 1"));
+        Assert.True(await PumpUntil(() => _monitor.Snapshot.Get("s")!.IsUsable));
+        await Settle();
+        Assert.DoesNotContain(_logs, l => l.StartsWith("Health probe"));
+
+        // Same server and health check, only logging.verbose changes: the loop keeps running and its state is kept.
+        ConfigParseResult verbose = ConfigParser.Parse($$"""{ "healthCheckDefaults": { "successThreshold": 1 }, "cacheServers": [ {{servers}} ], "logging": { "verbose": true } }""");
+        Assert.True(verbose.IsValid);
+        _monitor.Apply(verbose.Config!);
+        Assert.Equal(HealthState.Healthy, _monitor.Snapshot.Get("s")!.State);
+
+        Assert.True(await PumpUntil(() => _logs.Any(l => l.StartsWith("Health probe s/10.0.0.1: OK"))));
+        Assert.DoesNotContain(_logs, l => l.Contains("Healthy -> Unknown"));
+
+        // ...and switching it off again silences the probes.
+        _monitor.Apply(Config(servers, "\"successThreshold\": 1"));
+        await Settle();
+        int lines = _logs.Count(l => l.StartsWith("Health probe"));
+        await PumpUntil(() => false, maxSeconds: 25);
+        Assert.Equal(lines, _logs.Count(l => l.StartsWith("Health probe")));
+    }
+
+    [Fact]
     public async Task ProbeException_CountsAsFailure()
     {
         _probe.Decide = _ => throw new InvalidOperationException("boom");

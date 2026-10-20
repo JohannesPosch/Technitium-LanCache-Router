@@ -47,7 +47,7 @@ At the time of writing the list has 26 services and 128 entries, of which 16 are
 | The cron schedule fires (`refreshCron`, plus a random 0–2 min per node) | yes |
 | A failed refresh | retried after 5 minutes, or at the next scheduled time if that comes first |
 | `baseUrl` changed in the configuration | yes, immediately |
-| Any other configuration change (filters, routes, …) | **no** – the list in memory is re-filtered instantly |
+| Any other configuration change (filters, routes, …) | **no** – the list in memory is re-filtered instantly. A download or a pending retry that is running at that moment is dropped; the next refresh is at the next scheduled time. |
 | The app is disabled | nothing runs; enabling it again counts as a start |
 
 Downloads are **all or nothing**: `cache_domains.json` and every file it references must arrive, or the whole refresh

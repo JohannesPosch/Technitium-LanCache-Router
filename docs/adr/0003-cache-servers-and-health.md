@@ -50,8 +50,8 @@ Same knobs as the script, per server (defaults in `healthCheckDefaults`, overrid
 | (new)             | `path`, `expectedStatus[]` | http(s) only; default `/lancache-heartbeat`, 200/204  |
 | (new)             | `startupProbe`          | see below                                                |
 
-One async loop per server with start jitter; every state change is logged (server, address, old → new,
-reason). ICMP is dropped from v1 (needs privileges).
+One async loop per server with start jitter; every state change is logged (server, address, old → new;
+the reason is visible with `verbose`, which logs every probe result with its detail). ICMP is dropped from v1 (needs privileges).
 
 **Startup probe (decided):** when the app initializes (server start, or app config save adding/changing a
 server) the server is probed immediately, without waiting for the first interval. While a server is

@@ -82,7 +82,7 @@ random fraction of the interval so many servers do not probe in lockstep.
 |---|---|
 | nothing relevant (other servers, routes, DNS settings changed) | state and probing continue untouched |
 | `address` changed | restarts as Unknown |
-| any effective health-check value changed (including a change in `healthCheckDefaults` that affects it) | restarts as Unknown |
+| any effective health-check value changed (including a change in `healthCheckDefaults` that affects it, and a server's own `verbose`) | restarts as Unknown |
 | `enabled` set to `false` | becomes Disabled, probing stops |
 | `enabled` set back to `true` | restarts as Unknown |
 | server removed | disappears; routes that refer to it are rejected at validation time |
@@ -112,4 +112,5 @@ LanCache Router: Health probe monolith-1/192.168.17.44: FAILED (timeout after 2s
 - Use **`http`** if the box can be up with nginx down (container crashed, port still open through a proxy).
 - Keep **`successThreshold` > `failThreshold`**: recover cautiously, fail quickly.
 - A flapping server (Healthy ⇄ Unhealthy) means the thresholds are too tight for its behavior or the path is unreliable.
-  Turn on `verbose` and look at the detail text.
+  Turn on `verbose` and look at the detail text. Prefer the global `logging.verbose` for this: switching a server's own
+  `healthCheck.verbose` on counts as a health-check change and restarts that server as *Unknown* (a few seconds of passthrough).
