@@ -63,6 +63,11 @@ public sealed class DomainListManager : IDisposable
     }
 
     /// <summary>
+    /// Whether list refreshes log their details (per-service pattern counts). Set before <see cref="Apply"/>.
+    /// </summary>
+    public bool Verbose { get; set; }
+
+    /// <summary>
     /// The current matcher. Lock-free and safe to call from the request path. Empty until a list is available.
     /// </summary>
     public DomainMatcher Matcher => Volatile.Read(ref _matcher);
@@ -179,6 +184,12 @@ public sealed class DomainListManager : IDisposable
         DomainMatcher matcher = DomainMatcher.Create(_raw, config, _log);
         Volatile.Write(ref _matcher, matcher);
         _log($"Domain list: {matcher.Count} patterns active in {matcher.ServiceCounts.Count} service(s)");
+
+        if (Verbose)
+        {
+            foreach (var service in matcher.ServiceCounts)
+                _log($"Domain list: service '{service.Key}': {service.Value} pattern(s) active");
+        }
     }
 
     /// <summary>
@@ -267,6 +278,9 @@ public sealed class DomainListManager : IDisposable
     private async Task<bool> RefreshAsync(DomainListConfig config, long generation, CancellationToken cancellationToken)
     {
         RawDomainList fetched;
+
+        if (Verbose)
+            _log($"Domain list: downloading from {config.BaseUrl} (timeout {config.HttpTimeoutSeconds}s)");
 
         try
         {

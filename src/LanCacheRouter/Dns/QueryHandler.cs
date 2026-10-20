@@ -41,7 +41,7 @@ public sealed class QueryHandler
 	public void Configure(RouterConfig config, ResponseContext context)
 	{
 		Volatile.Write(ref _state, config.Enabled
-			? new State(RoutingTable.Create(config), config.Dns, context, config.Logging.Queries)
+			? new State(RoutingTable.Create(config), config.Dns, context, config.Logging.Queries || config.Logging.Verbose, config.Logging.Verbose)
 			: null);
 	}
 
@@ -60,19 +60,19 @@ public sealed class QueryHandler
 		try
 		{
 			if (request.Question.Count != 1)
-				return null;
+				return Skip(state, remoteEP, null, $"{request.Question.Count} questions, only single-question queries are handled");
 
 			DnsQuestionRecord question = request.Question[0];
 			if (question.Class != DnsClass.IN || !CacheAnswerBuilder.IsHandledType(question.Type))
-				return null;
+				return Skip(state, remoteEP, question, $"class {question.Class} / type {question.Type} is not handled");
 
 			RoutingDecision decision = state.Routing.Resolve(remoteEP.Address, _health());
 			if (decision.Outcome != RoutingOutcome.Cache)
-				return null;
+				return Skip(state, remoteEP, question, DescribePassthrough(decision));
 
 			string? service = _matcher().Match(question.Name);
 			if (service is null)
-				return null;
+				return Skip(state, remoteEP, question, $"not a cache domain (route {decision.Route!.SourceCidr} -> {decision.Server!.Name})");
 
 			DnsDatagram? response = CacheAnswerBuilder.Build(request, decision.Server!, state.Dns, state.Context);
 
@@ -81,6 +81,10 @@ public sealed class QueryHandler
 				_log($"Answered {remoteEP.Address} {question.Type} {question.Name} [{service}] -> {decision.Server!.Name} ({decision.Server.Address})"
 					+ (decision.FailedOver ? " (failover)" : "")
 					+ (response.Answer.Count == 0 ? " (no data)" : ""));
+			}
+			else if (response is null)
+			{
+				return Skip(state, remoteEP, question, $"[{service}] answer builder returned nothing (type/mode passthrough)");
 			}
 
 			return response;
@@ -93,7 +97,32 @@ public sealed class QueryHandler
 	}
 
 	/// <summary>
+	/// Passes the query through and, in verbose mode, logs why.
+	/// </summary>
+	private DnsDatagram? Skip(State state, IPEndPoint remoteEP, DnsQuestionRecord? question, string reason)
+	{
+		if (state.Verbose)
+			_log($"Passed through {remoteEP.Address} {question?.Type} {question?.Name}: {reason}");
+
+		return null;
+	}
+
+	/// <summary>
+	/// Explains a passthrough decision of the routing table for the verbose log.
+	/// </summary>
+	private static string DescribePassthrough(RoutingDecision decision)
+	{
+		if (decision.Route is null)
+			return "client matches no route";
+
+		string route = $"route {decision.Route.SourceCidr} (priority {decision.Route.Priority})";
+		return decision.Route.Behavior == RouteBehavior.Passthrough
+			? $"{route} is a passthrough route"
+			: $"{route}: server '{decision.Route.Server}' is not Healthy and no usable failover";
+	}
+
+	/// <summary>
 	/// Everything derived from one configuration, swapped as a unit.
 	/// </summary>
-	private sealed record State(RoutingTable Routing, DnsConfig Dns, ResponseContext Context, bool LogQueries);
+	private sealed record State(RoutingTable Routing, DnsConfig Dns, ResponseContext Context, bool LogQueries, bool Verbose);
 }

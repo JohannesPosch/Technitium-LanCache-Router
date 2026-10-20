@@ -175,6 +175,7 @@ What the answers look like. Details in [DNS answers](08-dns-answers.md).
 | Option | Type, default | Effect |
 |---|---|---|
 | `queries` | boolean, `false` | Log one line for **every query the app answers**: `Answered <client> <type> <name> [<service>] -> <server> (<address>)`. Use it to debug routing; turn it off afterwards. State changes, list refreshes, warnings and errors are always logged. |
+| `verbose` | boolean, `false` | Debug mode. Logs **why** every decision was made: each query the app passes through with the reason (`client matches no route`, `server 'x' is not Healthy`, `not a cache domain`, …), every health probe result (as if `verbose` were set on all health checks), per-service pattern counts and download details of list refreshes, and the effective servers, health checks and routes whenever the config is applied. Implies `queries`. Very chatty on a busy server (every DNS query is logged); turn it off afterwards. |
 
 ---
 
@@ -208,7 +209,7 @@ A complete configuration with two cache servers, one of them used as failover:
   ],
 
   "dns": { "ttl": 60 },
-  "logging": { "queries": false }
+  "logging": { "queries": false, "verbose": false }
 }
 ```
 

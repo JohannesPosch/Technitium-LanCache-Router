@@ -91,6 +91,9 @@ public sealed class App : IDnsApplication, IDnsRequestBlockingHandler, IDnsAppli
 				dnsServer.ResponsiblePerson?.Address ?? "hostmaster." + dnsServer.ServerDomain,
 				dnsServer.UdpPayloadSize));
 
+			if (newConfig.Logging.Verbose)
+				LogEffectiveConfig(newConfig);
+
 			if (newConfig.Enabled)
 			{
 				_domains ??= new DomainListManager(
@@ -99,6 +102,7 @@ public sealed class App : IDnsApplication, IDnsRequestBlockingHandler, IDnsAppli
 					Log);
 
 				_health.Apply(newConfig);
+				_domains.Verbose = newConfig.Logging.Verbose;
 				_domains.Apply(newConfig.DomainList);
 				Log($"enabled with {newConfig.CacheServers.Count} cache server(s) and {newConfig.Routes.Count} route(s)");
 			}
@@ -133,6 +137,21 @@ public sealed class App : IDnsApplication, IDnsRequestBlockingHandler, IDnsAppli
 	{
 		_health.Dispose();
 		_domains?.Dispose();
+	}
+
+	/// <summary>
+	/// Verbose mode: logs what was configured, so a log shows what the decisions that follow are based on.
+	/// </summary>
+	/// <param name="config">The configuration that is being applied.</param>
+	private void LogEffectiveConfig(RouterConfig config)
+	{
+		Log($"verbose: enabled={config.Enabled}, domain list {config.DomainList.BaseUrl}, refresh '{config.DomainList.RefreshCron}'");
+
+		foreach (CacheServerConfig server in config.CacheServers)
+			Log($"verbose: cache server '{server.Name}' {server.Address} enabled={server.Enabled}, health check {config.ResolveHealthCheck(server)}");
+
+		foreach (RouteConfig route in config.Routes.OrderBy(r => r.Priority))
+			Log($"verbose: route priority {route.Priority} {route.SourceCidr} enabled={route.Enabled} {route.Behavior} server={route.Server ?? "-"} failover={route.Failover.Action}/{route.Failover.Server ?? "-"}");
 	}
 
 	/// <summary>

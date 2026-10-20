@@ -474,4 +474,11 @@ public sealed class LoggingConfig
     /// State changes, list refreshes and errors are always logged.
     /// </summary>
     public bool Queries { get; init; }
+
+    /// <summary>
+    /// Whether the app explains its decisions: why each query was answered or passed through, every health probe,
+    /// the details of list refreshes and the effective configuration. Very chatty; intended for debugging only.
+    /// Implies the per-query lines of <see cref="Queries"/>.
+    /// </summary>
+    public bool Verbose { get; init; }
 }

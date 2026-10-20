@@ -219,6 +219,23 @@ public class QueryHandlerTests
     }
 
     [Fact]
+    public void VerboseLogging_ExplainsWhyQueriesArePassedThrough()
+    {
+        QueryHandler verbose = Handler(Config(", \"logging\": { \"verbose\": true }"));
+
+        verbose.Handle(TestDns.Query("cdn1.steamcontent.com"), TestDns.Client("10.9.9.9"));
+        verbose.Handle(TestDns.Query("example.com"), TestDns.Client("192.168.17.50"));
+        _health = Snapshot(HealthState.Unhealthy, HealthState.Unhealthy);
+        verbose.Handle(TestDns.Query("cdn1.steamcontent.com"), TestDns.Client("192.168.17.50"));
+
+        string[] lines = [.. _logs];
+        Assert.Equal(3, lines.Length);
+        Assert.Contains("client matches no route", lines[0]);
+        Assert.Contains("not a cache domain", lines[1]);
+        Assert.Contains("not Healthy", lines[2]);
+    }
+
+    [Fact]
     public void UnexpectedError_IsLoggedAndTheQueryPassedThrough()
     {
         QueryHandler handler = new(() => throw new InvalidOperationException("boom"), () => _matcher, _logs.Enqueue);
